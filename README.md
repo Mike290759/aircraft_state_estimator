@@ -15,6 +15,7 @@ FlightGear simulator is an AppImage (like an EXE on Windows). Download it and mo
 
 # Hello World (aircarft rolling and climbing)
 In its own Terminal window:
+    
     ./flightgear-2024.1.2-linux-amd64.AppImage --native-fdm=socket,out,30,localhost,5501,udp --native-fdm=socket,in,30,localhost,5502,udp --fdm=null --airport=NZPP 
 
 Select view  with v
