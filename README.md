@@ -13,7 +13,7 @@ FlightGear simulator is an AppImage (like an EXE on Windows). Download it and mo
     ...
     deactivate
 
-# Hello World (aircarft rolling and climbing)
+# Hello World (aircraft rolling and climbing)
 ## Start FlightGear
 In a Terminal window:
     
