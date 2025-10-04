@@ -46,21 +46,43 @@ Janus: using venv from '/home/mike/aircraft_state_estimator/flightgear'
 :- use_module(library(janus)).
 
 % ~/Applications/flightgear-2024.1.2-linux-amd64.AppImage --httpd=8080 --airport=NZWN --runway=34
+
 user:test :-
-    py_call('flightgear_python.fg_if':'HTTPConnection'(localhost, 8080), C),
     % py_call(C:list_props('/position', recurse_limit=0), Props), py_call(pprint:pprint(Props)),
     % py_call(C:list_props('/controls', recurse_limit=0), Props), py_call(pprint:pprint(Props)),
+    thread_create(steer_heading_on_ground(340), _, [detached(true)]).
 
+
+%! steer_heading_on_ground(+Heading:integer) is det.
+
+steer_heading_on_ground(Heading) :-
+    py_call('flightgear_python.fg_if':'HTTPConnection'(localhost, 8080), C),
+    get_prop('/instrumentation/magnetic-compass/indicated-heading-deg', Magnetic_Compass_Indicated_Heading, C),
+    get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Unaligned_Indicated_Heading, C),
+    get_prop('/instrumentation/heading-indicator/align-deg', Initial_Align_Deg, C),
+    direction_difference(Magnetic_Compass_Indicated_Heading, Unaligned_Indicated_Heading, Heading_Indicator_Alignment_Error),
+    Align_Deg is integer(Initial_Align_Deg + Heading_Indicator_Alignment_Error) mod 360,
     repeat,
-    set_prop('/instrumentation/heading-indicator/align-deg', 294, C),
-    get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Heading, C),
-    Error_Degrees is integer((340 - Heading + 540)) mod 360 - 180,
+    set_prop('/instrumentation/heading-indicator/align-deg', Align_Deg, C),
+    get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Indicated_Heading, C),
+    direction_difference(Heading, Indicated_Heading, Error_Degrees),
     Normalised_Error is Error_Degrees / 180.0,  % [-1, +1]
     clamped(2.0 * Normalised_Error, -1, +1, Rudder),
     writeln([Heading, Rudder]),
     set_prop('/controls/flight/rudder', Rudder, C),
     sleep(0.5),
     fail.
+
+
+%!  direction_difference(+H1, +H2, -Diff) is det.
+%
+%   @arg Diff [-180, +180]
+
+direction_difference(H1, H2, Diff) :-
+    Diff is integer((H1 - H2 + 540)) mod 360 - 180.
+
+
+%!   clamped(+Expr, +Left, +Right, -Clamped) is det.
 
 clamped(Expr, Left, Right, Clamped) :-
     X is Expr,
