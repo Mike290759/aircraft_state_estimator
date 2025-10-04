@@ -45,15 +45,53 @@ Janus: using venv from '/home/mike/aircraft_state_estimator/flightgear'
 
 :- use_module(library(janus)).
 
+% ~/Applications/flightgear-2024.1.2-linux-amd64.AppImage --httpd=8080 --airport=NZWN --runway=34
 user:test :-
     py_call('flightgear_python.fg_if':'HTTPConnection'(localhost, 8080), C),
     % py_call(C:list_props('/position', recurse_limit=0), Props), py_call(pprint:pprint(Props)),
+    % py_call(C:list_props('/controls', recurse_limit=0), Props), py_call(pprint:pprint(Props)),
+
+    repeat,
+    set_prop('/instrumentation/heading-indicator/align-deg', 294, C),
+    get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Heading, C),
+    Error_Degrees is integer((340 - Heading + 540)) mod 360 - 180,
+    Normalised_Error is Error_Degrees / 180.0,  % [-1, +1]
+    clamped(2.0 * Normalised_Error, -1, +1, Rudder),
+    writeln([Heading, Rudder]),
+    set_prop('/controls/flight/rudder', Rudder, C),
+    sleep(0.5),
+    fail.
+
+clamped(Expr, Left, Right, Clamped) :-
+    X is Expr,
+    (   X =< Left
+    ->  Clamped = Left
+    ;   X >= Right
+    ->  Clamped = Right
+    ;   Clamped = X
+    ).
+
+
+    /*
+     *
+     *
+    set_prop('/position/altitude-ft', 2000, C),
+
+    set_prop('/controls/engines/current-engine/carb-heat', 0, C),
+    set_prop('/controls/engines/engine/mixture', 0.6, C),
+    set_prop('/controls/engines/engine/throttle', 0.8, C),
+
+    set_prop('/controls/switches/starter', true, C),
+    sleep(5.0),
+    set_prop('/controls/switches/starter', false, C),
+
+
     get_prop('/position/altitude-ft', A0, C),
     between(0, 10, I),
     A1 is A0 + I * 100,
     set_prop('/position/altitude-ft', A1, C),
     fail.
-
+*/
 
 %!  set_prop(+Property_Path, +Value, +HTTP_Connection) is det.
 

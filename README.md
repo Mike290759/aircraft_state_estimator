@@ -28,7 +28,7 @@ In another terminal window:
     python src/simple_fdm.py
 
 # SWIPL
-    ./Applications/flightgear-2024.1.2-linux-amd64.AppImage --httpd=8080 --altitude=5000 --airport=NZPP
+    ~/Applications/flightgear-2024.1.2-linux-amd64.AppImage --httpd=8080 --airport=NZWN --runway=34
 
     In another terminal window:
 
