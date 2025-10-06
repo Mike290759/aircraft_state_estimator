@@ -53,7 +53,8 @@ user:test :-
     flightgear_http_connection(C),
     set_prop('/sim/current-view/view-number', 1, C),   % Chase view. Takes a few seconds to load
     align_heading_indicator,
-    thread_create(steer_heading_on_ground(340), _, [detached(true)]).
+    thread_create(steer_heading_on_ground(338), _, [detached(true)]),
+    thread_create(fly_heading(340), _, [detached(true)]).
 
 
 %! steer_heading_on_ground(+Heading:integer) is det.
@@ -61,13 +62,42 @@ user:test :-
 steer_heading_on_ground(Heading) :-
     flightgear_http_connection(C),
     repeat,
+    sleep(0.2),
+    get_prop('/position/altitude-agl-ft', Altitude_AGL_Feet, C),
+    Altitude_AGL_Feet < 10,
     get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Indicated_Heading, C),
-    direction_difference(Heading, Indicated_Heading, Error_Degrees),
+    direction_difference(Indicated_Heading, Heading, Error_Degrees),   % +ve means right of intended track
     Normalised_Error is Error_Degrees / 180.0,  % [-1, +1]
-    clamped(2.0 * Normalised_Error, -1, +1, Rudder),
-    writeln([Indicated_Heading, Rudder]),
+    clamped(-5.0 * Normalised_Error, -1, +1, Rudder),
+    writeln(steering_on_ground(ih(Indicated_Heading), rudder(Rudder))),
     set_prop('/controls/flight/rudder', Rudder, C),
-    sleep(0.5),
+    fail.
+
+
+%!  fly_heading(+Heading:integer) is det.
+
+fly_heading(Heading) :-
+    flightgear_http_connection(C),
+    repeat,
+    sleep(0.2),
+    get_prop('/position/altitude-agl-ft', Altitude_AGL_Feet, C),
+    Altitude_AGL_Feet >= 10,
+
+    get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Indicated_Heading, C),
+    get_prop('/instrumentation/attitude-indicator/indicated-roll-deg', Indicated_Roll_Deg, C),
+    direction_difference(Indicated_Heading, Heading, Heading_Error_Degrees),    % +ve means right of intended track
+    (   Heading_Error_Degrees < -10
+    ->  Aileron = 0.1
+
+    ;   -10 =< Heading_Error_Degrees, Heading_Error_Degrees =< +10
+    ->
+        clamped(-10 * Indicated_Roll_Deg / 180.0, -0.5, +0.5, aileron(Aileron))
+
+    ;   otherwise
+    ->  Aileron = -0.1
+    ),
+    writeln(fly_heading(ih(Indicated_Heading), he(Heading_Error_Degrees), ird(Indicated_Roll_Deg), Aileron)),
+    set_prop('/controls/flight/aileron', Aileron, C),
     fail.
 
 
@@ -98,11 +128,12 @@ direction_difference(H1, H2, Diff) :-
 clamped(Expr, Left, Right, Clamped) :-
     X is Expr,
     (   X =< Left
-    ->  Clamped = Left
+    ->  Clamped is Left
     ;   X >= Right
-    ->  Clamped = Right
+    ->  Clamped is Right
     ;   Clamped = X
     ).
+
 
 %!  flightgear_http_connection(-HTTPConnection) is det.
 
