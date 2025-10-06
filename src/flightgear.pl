@@ -45,14 +45,18 @@ Janus: using venv from '/home/mike/aircraft_state_estimator/flightgear'
 
 :- use_module(library(janus)).
 
-% ~/Applications/flightgear-2024.1.2-linux-amd64.AppImage --httpd=8080 --airport=NZWN --runway=34
-
 user:test :-
-    % py_call(C:list_props('/position', recurse_limit=0), Props), py_call(pprint:pprint(Props)),
-    % py_call(C:list_props('/controls', recurse_limit=0), Props), py_call(pprint:pprint(Props)),
+    process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
+                   ['--httpd=8080', '--airport=NZWN', '--runway=34'],
+                   [stderr(pipe(Out))]),
+    repeat,
+    read_line_to_string(Out, Line),
+    sub_string(Line, _, _, _, "Primer reset to 0"),
+    !,
     flightgear_http_connection(C),
     set_prop('/sim/current-view/view-number', 1, C),   % Chase view. Takes a few seconds to load
     align_heading_indicator,
+    set_prop('/controls/engines/engine/throttle', 1.0, C),
     thread_create(steer_heading_on_ground(338), _, [detached(true)]),
     thread_create(fly_heading(340), _, [detached(true)]).
 
