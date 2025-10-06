@@ -66,8 +66,8 @@ steer_heading_on_ground(Heading) :-
     get_prop('/position/altitude-agl-ft', Altitude_AGL_Feet, C),
     Altitude_AGL_Feet < 10,
     get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Indicated_Heading, C),
-    direction_difference(Indicated_Heading, Heading, Error_Degrees),   % +ve means right of intended track
-    Normalised_Error is Error_Degrees / 180.0,  % [-1, +1]
+    direction_difference(Indicated_Heading, Heading, Error_Deg),   % +ve means right of intended track
+    Normalised_Error is Error_Deg / 180.0,  % [-1, +1]
     clamped(-5.0 * Normalised_Error, -1, +1, Rudder),
     writeln(steering_on_ground(ih(Indicated_Heading), rudder(Rudder))),
     set_prop('/controls/flight/rudder', Rudder, C),
@@ -85,18 +85,20 @@ fly_heading(Heading) :-
 
     get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Indicated_Heading, C),
     get_prop('/instrumentation/attitude-indicator/indicated-roll-deg', Indicated_Roll_Deg, C),
-    direction_difference(Indicated_Heading, Heading, Heading_Error_Degrees),    % +ve means right of intended track
-    (   Heading_Error_Degrees < -10
-    ->  Aileron = 0.1
+    direction_difference(Indicated_Heading, Heading, Heading_Error_Deg),    % +ve means right of intended track
+    (   Heading_Error_Deg < -10
+    ->  Required_Roll_Deg = 10
 
-    ;   -10 =< Heading_Error_Degrees, Heading_Error_Degrees =< +10
-    ->
-        clamped(-10 * Indicated_Roll_Deg / 180.0, -0.5, +0.5, aileron(Aileron))
+    ;   -10 =< Heading_Error_Deg, Heading_Error_Deg =< +10
+    ->  Required_Roll_Deg is -Heading_Error_Deg
 
     ;   otherwise
-    ->  Aileron = -0.1
+    ->  Required_Roll_Deg = -10
     ),
-    writeln(fly_heading(ih(Indicated_Heading), he(Heading_Error_Degrees), ird(Indicated_Roll_Deg), Aileron)),
+    direction_difference(Indicated_Roll_Deg, Required_Roll_Deg, Roll_Error_Deg),  % +ve means roll left to null
+    clamped(-10 * Roll_Error_Deg / 180.0, -0.2, +0.2, Aileron),
+
+    writeln(fly_heading(ih(Indicated_Heading), he(Heading_Error_Deg), rrd(Required_Roll_Deg), ird(Indicated_Roll_Deg), aileron(Aileron))),
     set_prop('/controls/flight/aileron', Aileron, C),
     fail.
 
