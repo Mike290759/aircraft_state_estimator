@@ -44,6 +44,9 @@ Janus: using venv from '/home/mike/aircraft_state_estimator/flightgear'
 */
 
 :- use_module(library(janus)).
+:- use_module(library('plot/plotter')).
+:- use_module(library(autowin)).
+
 
 user:test :-
     process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
@@ -67,8 +70,7 @@ user:test :-
 
 steer_heading_on_ground :-
     flightgear_http_connection(HTTP_Conn),
-    pid_controller(( get_prop('/position/altitude-agl-ft', HTTP_Conn, Altitude_AGL_Feet),              % Guard
-                     Altitude_AGL_Feet < 10),
+    pid_controller(on_ground,                                                                          % Guard
                    heading_on_ground,                                                                  % Setpoint
                    get_prop('/instrumentation/heading-indicator/indicated-heading-deg', HTTP_Conn),    % State_Value
                    set_prop('/controls/flight/rudder', HTTP_Conn),                                     % Control
@@ -76,6 +78,13 @@ steer_heading_on_ground :-
                    0.03,                                                                               % P
                    0,                                                                                  % I
                    0).                                                                                 % D
+
+
+%!  on_ground(+HTTP_Conn) is semidet.
+
+on_ground(HTTP_Conn) :-
+    get_prop('/position/altitude-agl-ft', HTTP_Conn, Altitude_AGL_Feet),
+    Altitude_AGL_Feet < 10.
 
 
 %!  heading_on_ground(-Heading) is det.
@@ -205,6 +214,7 @@ align_heading_indicator :-
     pid_controller(:, :, :, :, :, +, +, +).
 
 pid_controller(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D) :-
+    pid_plot(P),
     call(State_Value_Pred, State_Value),
     sample_time(Sample_Time),
     thread_create(pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Sample_Time, 0, State_Value), _, [detached(true)]).
@@ -272,3 +282,16 @@ set_prop(Property_Path, HTTP_Conn, Value) :-
 
 get_prop(Property_Path, HTTP_Conn, Value) :-
     py_call(HTTP_Conn:get_prop(Property_Path), Value).
+
+
+%!  pid_plot(-P) is det.
+
+pid_plot(P) :-
+    new(W, auto_sized_picture('PID')),
+    send(W, max_size, size(1800, 600)),
+    send(W, display, new(P, plotter)),
+    send(P, axis, plot_axis(x, 0, 200, @default, 1500)),
+    send(P, axis, plot_axis(y, -1, 1, @default, 400)),
+    send(P, graph, new(G, plot_graph)),
+    send(W, open).
+

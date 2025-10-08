@@ -29,10 +29,5 @@ In another terminal window:
 
 # SWIPL
     cd ~/aircraft_state_estimator
-    swipl load.pl
+    swipl-win load.pl
     test.
-
-## In debug mode to catch observed crashes
-    cd ~/aircraft_state_estimator
-    gdb swipl
-    run -s load.pl
