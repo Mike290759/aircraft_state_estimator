@@ -60,64 +60,73 @@ user:test :-
     set_prop('/sim/current-view/view-number', HTTP_Conn, 1),   % "Chase" view. Takes a few seconds to load
     align_heading_indicator,
     set_prop('/controls/engines/engine/throttle', HTTP_Conn, 1.0),
-    steer_heading_on_ground.
+    pid_plotter(Plotter),
+    steer_heading_on_ground(Plotter),
+    fly_heading(Plotter).
 
 %    thread_create(fly_heading(340), _, [detached(true)]),
 %    thread_create(fly_pitch(4), _, [detached(true)]).
 
 
-%! steer_heading_on_ground is det.
+%! steer_heading_on_ground(+Plotter) is det.
 
-steer_heading_on_ground :-
+steer_heading_on_ground(Plotter) :-
+    P = 0.03,
+    I = 0.03,
+    D = 0.0,
+    Control_Min = -0.5,
+    Control_Max = +0.5,
     flightgear_http_connection(HTTP_Conn),
-    pid_controller(on_ground,                                                                          % Guard
-                   heading_on_ground,                                                                  % Setpoint
+    pid_controller(on_ground(HTTP_Conn),                                                               % Guard
+                   required_heading,                                                                   % Setpoint
                    get_prop('/instrumentation/heading-indicator/indicated-heading-deg', HTTP_Conn),    % State_Value
                    set_prop('/controls/flight/rudder', HTTP_Conn),                                     % Control
                    direction_difference,                                                               % Error calculation
-                   0.03,                                                                               % P
-                   0,                                                                                  % I
-                   0).                                                                                 % D
+                   P,
+                   I,
+                   D,
+                   Control_Min,
+                   Control_Max,
+                   Plotter,
+                   0.1,
+                   green).
 
 
 %!  on_ground(+HTTP_Conn) is semidet.
 
 on_ground(HTTP_Conn) :-
     get_prop('/position/altitude-agl-ft', HTTP_Conn, Altitude_AGL_Feet),
-    Altitude_AGL_Feet < 10.
+    writeln(Altitude_AGL_Feet),
+    Altitude_AGL_Feet < 5.
 
 
-%!  heading_on_ground(-Heading) is det.
+%!  required_heading(-Heading) is det.
 
-heading_on_ground(338).
+required_heading(338).
 
-%!  fly_heading(+Heading:integer) is det.
 
-fly_heading(Heading) :-
+%!  fly_heading is det.
+
+fly_heading(Plotter) :-
+    P = 0.01,
+    I = 0.0,
+    D = 0.0,
+    Control_Min = -0.5,
+    Control_Max = +0.5,
     flightgear_http_connection(HTTP_Conn),
-    repeat,
-    sleep(0.2),
-    get_prop('/position/altitude-agl-ft', HTTP_Conn, Altitude_AGL_Feet),
-    Altitude_AGL_Feet >= 10,
-
-    get_prop('/instrumentation/heading-indicator/indicated-heading-deg', HTTP_Conn, Indicated_Heading_Deg),
-    get_prop('/instrumentation/attitude-indicator/indicated-roll-deg', HTTP_Conn, Indicated_Roll_Deg),
-    direction_difference(Indicated_Heading_Deg, Heading, Heading_Error_Deg),    % +ve means right of intended track
-    (   Heading_Error_Deg < -10
-    ->  Required_Roll_Deg = 10
-
-    ;   -10 =< Heading_Error_Deg, Heading_Error_Deg =< +10
-    ->  Required_Roll_Deg is -Heading_Error_Deg
-
-    ;   otherwise
-    ->  Required_Roll_Deg = -10
-    ),
-    direction_difference(Indicated_Roll_Deg, Required_Roll_Deg, Roll_Error_Deg),  % +ve means roll left to null
-    clamped(-10 * Roll_Error_Deg / 180.0, -0.5, +0.5, Aileron),
-
-    % writeln(fly_heading(heading(Indicated_Heading_Deg), roll_error(Roll_Error_Deg), required_roll(Required_Roll_Deg), actual_roll(Indicated_Roll_Deg), aileron(Aileron))),
-    set_prop('/controls/flight/aileron', HTTP_Conn, Aileron),
-    fail.
+    pid_controller(\+ on_ground(HTTP_Conn),                                                            % Guard
+                   required_heading,                                                                   % Setpoint
+                   get_prop('/instrumentation/heading-indicator/indicated-heading-deg', HTTP_Conn),    % State_Value
+                   set_prop('/controls/flight/aileron', HTTP_Conn),                                    % Control
+                   direction_difference,                                                               % Error calculation
+                   P,
+                   I,
+                   D,
+                   Control_Min,
+                   Control_Max,
+                   Plotter,
+                   0.1,
+                   red).
 
 
 
@@ -146,29 +155,6 @@ fly_pitch(Required_Pitch_Deg) :-
     fail.
 
 
-%!  fly_indicated_airspeed(+Required_Speed_KT) is det.
-%
-%   Adjust trim to fly an indicated airspeed
-%
-%   NOT TESTED
-
-fly_indicated_airspeed(Required_Speed_KT) :-
-    flightgear_http_connection(HTTP_Conn),
-    set_prop('/controls/flight/elevator-trim', HTTP_Conn, 0),
-    Sample_Time = 0.2,
-    repeat,
-    sleep(Sample_Time),
-    get_prop('/instrumentation/airspeed-indicator/indicated-speed-kt', HTTP_Conn, Indicated_Speed_KT),
-    writeln(ias(Indicated_Speed_KT)),
-    Indicated_Speed_KT > 40,
-    Airspeed_Error is Indicated_Speed_KT - Required_Speed_KT,   % +ve if speed too high
-    get_prop('/controls/flight/elevator-trim', HTTP_Conn, Current_Elevator_Trim),
-    New_Elevator_Trim is Current_Elevator_Trim - 0.001 * Airspeed_Error * Sample_Time,
-    writeln(fly_indicated_airspeed(ias(Indicated_Speed_KT), elevator_trim(New_Elevator_Trim))),
-    set_prop('/controls/flight/elevator-trim', HTTP_Conn, New_Elevator_Trim),
-    fail.
-
-
 %!  align_heading_indicator is det.
 %
 %   Align the DI with the magnetic compass
@@ -183,7 +169,10 @@ align_heading_indicator :-
     set_prop('/instrumentation/heading-indicator/align-deg', HTTP_Conn, Align_Deg).
 
 
-%!  pid_controller(:Guard, :Setpoint_Pred, :State_Value_Pred, :Control_Pred, :Error_Pred, +P, +I, +D) is det.
+%!  pid_controller(:Guard, :Setpoint_Pred, :State_Value_Pred,
+%!                 :Control_Pred, :Error_Pred, +P, +I, +D, +Control_Min,
+%!                 +Control_Max, +Plotter, +Plot_Scale_Y, +Plot_Colour)
+%!                 is det.
 %
 %   PID controller to reduce the mismatch between the input setpoint
 %   and the desired state value. This predicate runs forever on its own
@@ -209,34 +198,50 @@ align_heading_indicator :-
 %   @arg P float the proportional gain
 %   @arg I float the integration gain
 %   @arg D float the derivative gain
+%   @arg Control_Min float
+%   @arg Control_Max float
+%   @arg Plotter graph object
+%   @arg Plot_Scale_Y factor to scale the error for plotting
+%   @arg Plot_Colour colour of the plot line
 
 :- meta_predicate
-    pid_controller(:, :, :, :, :, +, +, +).
+    pid_controller(:, :, :, :, :, +, +, +, +, +, +, +, +).
 
-pid_controller(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D) :-
-    pid_plot(P),
+pid_controller(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Control_Min, Control_Max, Plotter, Plot_Scale_Y, Plot_Colour) :-
+    send(Plotter, graph, new(Plot_Graph, plot_graph)),
+    send(Plot_Graph, colour, Plot_Colour),
     call(State_Value_Pred, State_Value),
     sample_time(Sample_Time),
-    thread_create(pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Sample_Time, 0, State_Value), _, [detached(true)]).
+    thread_create(pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Control_Min, Control_Max, Plot_Graph, Plot_Scale_Y, Sample_Time, 0, State_Value, 0),
+                  _,
+                  [detached(true)]).
 
 
-%! pid_controller_1(:Setpoint_Pred, :State_Value_Pred, :Control_Pred, :Error_Pred, +P, +I, +D, +Sample_Time, +Error_Sum, +Previous_Error) is det.
+%! pid_controller_1(:Setpoint_Pred, :State_Value_Pred, :Control_Pred,
+%!                  :Error_Pred, +P, +I, +D, +Control_Min, +Control_Max,
+%!                  +Plot_Graph, +Plot_Scale_Y, +Sample_Time, +Error_Sum,
+%!                  +Previous_Error, +Elapsed_Time) is det.
 
 :- meta_predicate
-    pid_controller_1(:, :, :, :, :, +, +, +, +, +, +).
+    pid_controller_1(:, :, :, :, :, +, +, +, +, +, +, +, +, +, +, +).
 
-pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Sample_Time, Error_Sum, Previous_Error) :-
+pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Control_Min, Control_Max, Plot_Graph, Plot_Scale_Y, Sample_Time, Error_Sum, Previous_Error, Elapsed_Time) :-
     (   Guard
     ->  call(Setpoint_Pred, Setpoint),
         call(State_Value_Pred, State_Value),
         call(Error_Pred, Setpoint, State_Value, Error),
+        Graph_Y is Error * Plot_Scale_Y,
+        send(Plot_Graph, append, Elapsed_Time, Graph_Y),
         Error_Sum_1 is Error_Sum + Error,
-        Control is P * Error + I * Error_Sum * Sample_Time + D * (Error - Previous_Error) / Sample_Time,
+        clamped(P * Error + I * Error_Sum * Sample_Time + D * (Error - Previous_Error) / Sample_Time, Control_Min, Control_Max, Control),
         call(Control_Pred, Control)
-    ;   true
+    ;   Error_Sum_1 = Error_Sum,
+        Error = Previous_Error
     ),
+    Elapsed_Time_1 is Elapsed_Time + Sample_Time,
     sleep(Sample_Time),
-    pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Sample_Time, Error_Sum_1, Error).
+    !,   % Precautionary green cut
+    pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Control_Min, Control_Max, Plot_Graph, Plot_Scale_Y, Sample_Time, Error_Sum_1, Error, Elapsed_Time_1).
 
 
 %!  sample_time(-Sample_Time) is det.
@@ -284,14 +289,13 @@ get_prop(Property_Path, HTTP_Conn, Value) :-
     py_call(HTTP_Conn:get_prop(Property_Path), Value).
 
 
-%!  pid_plot(-P) is det.
+%!  pid_plotter(-P) is det.
 
-pid_plot(P) :-
+pid_plotter(P) :-
     new(W, auto_sized_picture('PID')),
     send(W, max_size, size(1800, 600)),
     send(W, display, new(P, plotter)),
     send(P, axis, plot_axis(x, 0, 200, @default, 1500)),
     send(P, axis, plot_axis(y, -1, 1, @default, 400)),
-    send(P, graph, new(G, plot_graph)),
     send(W, open).
 
