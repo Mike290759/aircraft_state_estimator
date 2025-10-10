@@ -17,7 +17,7 @@ FlightGear simulator is an AppImage (like an EXE on Windows). Download it and mo
 ## Start FlightGear
 In a Terminal window:
 
-    ./Applications/flightgear-2024.1.2-linux-amd64.AppImage --native-fdm=socket,out,30,localhost,5501,udp --native-fdm=socket,in,30,localhost,5502,udp --fdm=null --airport=NZPP
+    ~/Applications/flightgear-2024.1.2-linux-amd64.AppImage --native-fdm=socket,out,30,localhost,5501,udp --native-fdm=socket,in,30,localhost,5502,udp --fdm=null --airport=NZPP
 
 Select view  with v
 

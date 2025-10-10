@@ -47,10 +47,36 @@ Janus: using venv from '/home/mike/aircraft_state_estimator/flightgear'
 :- use_module(library('plot/plotter')).
 :- use_module(library(autowin)).
 
+user:t :-
+    swi_fg_ports(FDM_TX_Port, CTRLS_TX_Port, CTRLS_RX_Port),
+    format(string(FDM_Out_Arg), '--native-fdm=socket,out,30,localhost,~w,udp', [FDM_TX_Port]),
+    format(string(CTRLS_Out_Arg), '--native-ctrls=socket,out,30,localhost,~w,udp', [CTRLS_TX_Port]),
+    format(string(CTRLS_In_Arg), '--native-ctrls=socket,in,30,localhost,~w,udp', [CTRLS_RX_Port]),
+    process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
+                   [FDM_Out_Arg, CTRLS_Out_Arg, CTRLS_In_Arg,
+                    '--httpd=8080',   % Slow but simple
+                    '--airport=NZWN',
+                    '--runway=34'],
+                   [stderr(pipe(_Out))]),
+    py_call(swi_fg:ctrls_event_pipe(CTRLS_RX_Port, CTRLS_TX_Port), CTRLS_Event_Pipe),
+    writeln(cep(CTRLS_Event_Pipe)).
+
+
+%! swi_fg_ports(-FDM_TX_Port, -CTRLS_TX_Port, -CTRLS_RX_Port) is det.
+%
+%   Port directions are from the point of view on FlightGear
+
+swi_fg_ports(5501, 5503, 5504).
+
 
 user:test :-
     process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
-                   ['--httpd=8080', '--airport=NZWN', '--runway=34'],
+                   ['--native-fdm=socket,out,30,localhost,5501,udp',
+                    '--native-ctrls=socket,out,30,localhost,5503,udp',
+                    '--native-ctrls=socket,in,30,localhost,5504,udp',
+                    '--httpd=8080',   % Slow but simple
+                    '--airport=NZWN',
+                    '--runway=34'],
                    [stderr(pipe(Out))]),
     repeat,
     read_line_to_string(Out, Line),
@@ -96,7 +122,6 @@ steer_heading_on_ground(Plotter) :-
 
 on_ground(HTTP_Conn) :-
     get_prop('/position/altitude-agl-ft', HTTP_Conn, Altitude_AGL_Feet),
-    writeln(Altitude_AGL_Feet),
     Altitude_AGL_Feet < 5.
 
 

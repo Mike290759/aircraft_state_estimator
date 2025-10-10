@@ -27,5 +27,9 @@ if __name__ == '__main__':  # NOTE: This is REQUIRED on Windows!
     while True:
         phi_rad_parent += 0.02
         # could also do `fdm_conn.event_pipe.parent_send` so you just need to pass around `fdm_conn`
+        start_time = time.perf_counter()
         fdm_event_pipe.parent_send((phi_rad_parent,))  # send tuple
+        end_time = time.perf_counter()
+        elapsed_time = end_time - start_time
+        print(f"Function execution time: {elapsed_time:.6f} seconds")
         time.sleep(0.01)
