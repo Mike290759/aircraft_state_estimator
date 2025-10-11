@@ -13,8 +13,9 @@ FlightGear simulator is an AppImage (like an EXE on Windows). Download it and mo
     ...
     deactivate
 
-# Hello World (aircraft rolling and climbing)
-## Start FlightGear
+# Demos
+## Aircraft rolling and climbing
+
 In a Terminal window:
 
     ~/Applications/flightgear-2024.1.2-linux-amd64.AppImage --native-fdm=socket,out,30,localhost,5501,udp --native-fdm=socket,in,30,localhost,5502,udp --fdm=null --airport=NZPP
@@ -26,6 +27,18 @@ In another terminal window:
     cd ~/aircraft_state_estimator
     source flightgear/bin/activate
     python src/simple_fdm.py
+
+## Wing Leveler
+In a Terminal window:
+
+    ~/Applications/flightgear-2024.1.2-linux-amd64.AppImage --native-fdm=socket,out,30,localhost,5501,udp --native-ctrls=socket,out,30,localhost,5503,udp --native-ctrls=socket,in,30,localhost,5504,udp
+
+In another terminal window:
+
+    cd ~/aircraft_state_estimator
+    source flightgear/bin/activate
+    python src/simple_wing_leveler.py
+
 
 # SWIPL
     cd ~/aircraft_state_estimator
