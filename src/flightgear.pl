@@ -32,49 +32,52 @@ SOFTWARE.
 
 /** <module> FlightGear interface
 
-Confirm Python virtual environment containing FlightGear is correctly
-configured.
+Initally used the Python interface to FlightGear via Janus but this
+proved complex and an issue with an uninitialised stdout stream on the
+sub-process used for the socket interface was never resolved.
 
-==
-?- py_version.
-Interactive session; added `.` to Python `sys.path`
-Janus 1.5.2 embeds Python 3.13.3 (main, Aug 14 2025, 11:53:40) [GCC 14.2.0]
-Janus: using venv from '/home/mike/aircraft_state_estimator/flightgear'
-==
+Uses the "generic" protocol to specify the format of data exchanged
+between Prolog and FlightGear Flight Simulator. See
+https://wiki.flightgear.org/Generic_protocol#Input/Output_Parameters
+
+Put generic_test.xml in	/home/mike/.fgfs/fgdata_2024_1/Protocol
 */
 
-:- use_module(library(janus)).
+:- use_module(library(socket)).
 :- use_module(library('plot/plotter')).
 :- use_module(library(autowin)).
 
-user:t :-
-    swi_fg_ports(FDM_TX_Port, CTRLS_TX_Port, CTRLS_RX_Port),
-    format(string(FDM_Out_Arg), '--native-fdm=socket,out,30,localhost,~w,udp', [FDM_TX_Port]),
-    format(string(CTRLS_Out_Arg), '--native-ctrls=socket,out,30,localhost,~w,udp', [CTRLS_TX_Port]),
-    format(string(CTRLS_In_Arg), '--native-ctrls=socket,in,30,localhost,~w,udp', [CTRLS_RX_Port]),
-    process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
-                   [FDM_Out_Arg, CTRLS_Out_Arg, CTRLS_In_Arg,
-                    '--httpd=8080',   % Slow but simple
-                    '--airport=NZWN',
-                    '--runway=34'],
-                   [stderr(pipe(_Out))]),
-    py_call(swi_fg:ctrls_event_pipe(CTRLS_RX_Port, CTRLS_TX_Port), CTRLS_Event_Pipe),
-    writeln(cep(CTRLS_Event_Pipe)).
 
-
-%! swi_fg_ports(-FDM_TX_Port, -CTRLS_TX_Port, -CTRLS_RX_Port) is det.
+%! swi_fg_ports(-TX_Port, -RX_Port) is det.
 %
 %   Port directions are from the point of view on FlightGear
 
-swi_fg_ports(5501, 5503, 5504).
+swi_fg_ports(5501, 5502).
 
 
-user:test :-
-    process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
-                   ['--native-fdm=socket,out,30,localhost,5501,udp',
-                    '--native-ctrls=socket,out,30,localhost,5503,udp',
-                    '--native-ctrls=socket,in,30,localhost,5504,udp',
-                    '--httpd=8080',   % Slow but simple
+%!  fg_root(-Dir) is det.
+%
+%  Location of FlightGear main data directory
+
+fg_root('/home/mike/.fgfs/fgdata_2024_1').
+
+
+%!  udp is det.
+%
+%   The protocol definition file is FG_ROOT/Protocol.swi_fg.xml. A
+%   symbolic link pointing to src/swi_fg.xml is used to avoid
+%   duplicating the file.
+%
+%   @todo Make the polling frequency a fact
+
+user:udp :-
+    fg_root(FG_ROOT),
+    format(string(FG_ROOT_Arg), '--fg-root=~w', [FG_ROOT]),
+    swi_fg_ports(TX_Port, RX_Port),
+    format(string(Generic_TX_Arg), '--generic=socket,out,1,localhost,~w,udp,swi_fg.xml', [TX_Port]),  % xml extension allowed???
+    format(string(Generic_RX_Arg), '--generic=socket,in,1,localhost,~w,udp,swi_fg.xml', [RX_Port]),
+     process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
+                   [FG_ROOT_Arg, Generic_TX_Arg, Generic_RX_Arg,
                     '--airport=NZWN',
                     '--runway=34'],
                    [stderr(pipe(Out))]),
@@ -82,16 +85,29 @@ user:test :-
     read_line_to_string(Out, Line),
     sub_string(Line, _, _, _, "Primer reset to 0"),
     !,
-    flightgear_http_connection(HTTP_Conn),
-    set_prop('/sim/current-view/view-number', HTTP_Conn, 1),   % "Chase" view. Takes a few seconds to load
-    align_heading_indicator,
-    set_prop('/controls/engines/engine/throttle', HTTP_Conn, 1.0),
-    pid_plotter(Plotter),
-    steer_heading_on_ground(Plotter),
-    fly_heading(Plotter).
+    thread_create(log_state, _, [detached(true)]),
+    udp_socket(Socket),
+    repeat,
+    member(Rudder, [-1.0, 0.0, +1.0]),
+    format(string(Payload), '~q~n', [Rudder]),
+    udp_send(Socket, Payload, localhost:RX_Port, [as(string)]),
+    sleep(1),
+    fail.
+
 
 %    thread_create(fly_heading(340), _, [detached(true)]),
 %    thread_create(fly_pitch(4), _, [detached(true)]).
+
+
+%!  log_state is det.
+
+log_state :-
+    udp_socket(Socket),
+    tcp_bind(Socket, 6011),
+    repeat,
+    udp_receive(Socket, Data, _, [as(term)]),
+    format('~q~n', [Data]),
+    fail.
 
 
 %! steer_heading_on_ground(+Plotter) is det.
