@@ -51,17 +51,16 @@ sub-process used for the socket interface was never resolved.
 :- use_module(library(pce)).
 :- use_module(library(process)).
 :- use_module(library(readutil)).
+:- use_module(library(sgml_write)).
+:- use_module(library(pairs)).
 
 
 %!  udp is det.
 %
-%   The protocol definition file is FG_ROOT/Protocol.swi_fg.xml. A
-%   symbolic link pointing to src/swi_fg.xml is used to avoid
-%   duplicating the file.
-%
 %   @todo Make the polling frequency a fact
 
 user:udp :-
+    write_swi_fg_xml_file,  % Supply the specification of the SWI/FG interface to FG
     fg_root(FG_ROOT),
     format(string(FG_ROOT_Arg), '--fg-root=~w', [FG_ROOT]),
     swi_fg_ports(TX_Port, RX_Port),
@@ -69,6 +68,7 @@ user:udp :-
     format(string(Generic_RX_Arg), '--generic=socket,in,1,localhost,~w,udp,swi_fg', [RX_Port]),
      process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
                    [FG_ROOT_Arg, Generic_TX_Arg, Generic_RX_Arg,
+                    '--httpd=8080',   % Slow but good for ad hoc gets and sets
                     '--airport=NZWN',
                     '--runway=34'],
                    [stderr(pipe(Out))]),
@@ -76,7 +76,7 @@ user:udp :-
     read_line_to_string(Out, Line),
     sub_string(Line, _, _, _, "Primer reset to 0"),
     !,
-    thread_create(log_state(TX_Port), _, [detached(true)]),
+    thread_create(track_aircraft_state(TX_Port), _, [detached(true)]),
     udp_socket(Socket),
     repeat,
     member(Rudder, [-1.0, 0.0, +1.0]),
@@ -90,16 +90,29 @@ user:udp :-
 %    thread_create(fly_pitch(4), _, [detached(true)]).
 
 
-%!  log_state(+Port) is det.
+%!  track_aircraft_state(+Port) is det.
+%
+%   Maintain a database of the aircraft data specified in
+%   swi_fg_input/2
 
-log_state(Port) :-
+track_aircraft_state(Port) :-
     udp_socket(Socket),
     tcp_bind(Socket, Port),
     repeat,
-    udp_receive(Socket, Data, _, [as(term)]),
-    format('~q~n', [Data]),
+    udp_receive(Socket, Tuple, _, [as(term)]),
+    findall(Node_Name, swi_fg_input(Node_Name, _), Node_Names),
+    round_to_square_list(Tuple, Values),
+    pairs_keys_values(Pairs, Node_Names, Values),
+    dict_pairs(Dict, aircraft_state, Pairs),
+    format('~q~n', [Dict]),
     fail.
 
+%! round_to_square_list(+Tuple, -List) is det.
+
+round_to_square_list((A,B), [A|T]) :-
+    !,
+    round_to_square_list(B, T).
+round_to_square_list(A, [A]).
 
 %! swi_fg_ports(-TX_Port, -RX_Port) is det.
 %
@@ -113,6 +126,71 @@ swi_fg_ports(5501, 5502).
 %  Location of FlightGear main data directory
 
 fg_root('/home/mike/.fgfs/fgdata_2024_1').
+
+
+%!  write_swi_fg_xml_file is det.
+%
+%   Write the XML file that specifies the data to be read and written by
+%   the FlightGear "generic" (UDP) interface
+
+write_swi_fg_xml_file :-
+    fg_root(FG_Root),
+    format(string(Dir), '~w/Protocol', [FG_Root]),
+    directory_file_path(Dir, 'swi_fg.xml', Path),
+    setup_call_cleanup(open(Path, write, Out),
+                       swi_fg_xml_write_1(Out),
+                       close(Out)).
+
+
+%!  swi_fg_xml_write_1(+Out:stream) is det.
+
+swi_fg_xml_write_1(Out) :-
+    findall(Chunk, chunk(input, Chunk), Output_Chunks),   % Inputs to FG are outputs from SWI
+    findall(Chunk, chunk(output, Chunk), Input_Chunks),
+    DOM = [element('PropertyList',
+                   [],
+                   [element(generic,
+                            [],
+                            [element(output,
+                                     [],
+                                     [element(line_separator,[],[newline]),
+                                      element(var_separator,[],[',']),
+                                      element(binary_mode,[], [false])|Output_Chunks]),
+                            element(input,
+                                     [],
+                                     [element(line_separator,[],[newline]),
+                                      element(var_separator,[],[',']),
+                                      element(binary_mode,[], [false])|Input_Chunks])])])],
+    xml_write(Out, DOM, []).
+
+
+%!  chunk(+Direction, -Chunk) is nondet.
+
+chunk(Direction, Chunk) :-
+    (   Direction == input
+    ->  swi_fg_input(Node_Name, Format)
+
+    ;   Direction == output
+    ->  swi_fg_output(Node_Name, Format)
+    ),
+    Chunk = element(chunk,
+                    [],
+                    [element(name, [], [Node_Name]),
+                     element(format, [], [Format]),
+                     element(node, [], [Node_Name])]).
+
+
+%!  swi_fg_input(-Node_ID:atom, -Format:atom).
+
+swi_fg_input('instrumentation/heading-indicator/indicated-heading-deg', '%d').
+swi_fg_input('position/altitude-agl-ft', '%d').
+swi_fg_input('instrumentation/airspeed-indicator/indicated-speed-kt', '%d').
+swi_fg_input('instrumentation/attitude-indicator/indicated-pitch-deg', '%d').
+
+
+%!  swi_fg_output(-Node_ID:atom, -Format:atom).
+
+swi_fg_output('controls/flight/rudder', '%d').
 
 
 %! steer_heading_on_ground(+Plotter) is det.
@@ -317,6 +395,21 @@ clamped(Expr, Left, Right, Clamped) :-
     ;   Clamped = X
     ).
 
+%!  flightgear_http_connection(-HTTPConnection) is det.
+
+flightgear_http_connection(HTTPConnection) :-
+    py_call('flightgear_python.fg_if':'HTTPConnection'(localhost, 8080, timeout_s=10), HTTPConnection).
+
+
+%!  set_prop(+Property_Path, +HTTP_Conn, +Value) is det.
+
+set_prop(Property_Path, HTTP_Conn, Value) :-
+    py_call(HTTP_Conn:set_prop(Property_Path, Value)).
+
+%!  get_prop(+Property_Path, +HTTP_Conn, -Value) is det.
+
+get_prop(Property_Path, HTTP_Conn, Value) :-
+    py_call(HTTP_Conn:get_prop(Property_Path), Value).
 
 %!  pid_plotter(-P) is det.
 

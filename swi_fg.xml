@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<PropertyList>
+  <generic>
+    <output><line_separator>newline</line_separator><var_separator>,</var_separator><binary_mode>false</binary_mode>
