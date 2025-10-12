@@ -32,34 +32,25 @@ SOFTWARE.
 
 /** <module> FlightGear interface
 
-Initally used the Python interface to FlightGear via Janus but this
-proved complex and an issue with an uninitialised stdout stream on the
-sub-process used for the socket interface was never resolved.
-
 Uses the "generic" protocol to specify the format of data exchanged
 between Prolog and FlightGear Flight Simulator. See
 https://wiki.flightgear.org/Generic_protocol#Input/Output_Parameters
 
 Put generic_test.xml in	/home/mike/.fgfs/fgdata_2024_1/Protocol
+
+Initally used the Python interface to FlightGear via Janus but this
+proved complex and an issue with an uninitialised stdout stream on the
+sub-process used for the socket interface was never resolved.
 */
 
 :- use_module(library(socket)).
 :- use_module(library('plot/plotter')).
+:- use_module(library('plot/axis')).
 :- use_module(library(autowin)).
-
-
-%! swi_fg_ports(-TX_Port, -RX_Port) is det.
-%
-%   Port directions are from the point of view on FlightGear
-
-swi_fg_ports(5501, 5502).
-
-
-%!  fg_root(-Dir) is det.
-%
-%  Location of FlightGear main data directory
-
-fg_root('/home/mike/.fgfs/fgdata_2024_1').
+:- use_module(library(lists)).
+:- use_module(library(pce)).
+:- use_module(library(process)).
+:- use_module(library(readutil)).
 
 
 %!  udp is det.
@@ -74,8 +65,8 @@ user:udp :-
     fg_root(FG_ROOT),
     format(string(FG_ROOT_Arg), '--fg-root=~w', [FG_ROOT]),
     swi_fg_ports(TX_Port, RX_Port),
-    format(string(Generic_TX_Arg), '--generic=socket,out,1,localhost,~w,udp,swi_fg.xml', [TX_Port]),  % xml extension allowed???
-    format(string(Generic_RX_Arg), '--generic=socket,in,1,localhost,~w,udp,swi_fg.xml', [RX_Port]),
+    format(string(Generic_TX_Arg), '--generic=socket,out,1,localhost,~w,udp,swi_fg', [TX_Port]),
+    format(string(Generic_RX_Arg), '--generic=socket,in,1,localhost,~w,udp,swi_fg', [RX_Port]),
      process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
                    [FG_ROOT_Arg, Generic_TX_Arg, Generic_RX_Arg,
                     '--airport=NZWN',
@@ -85,7 +76,7 @@ user:udp :-
     read_line_to_string(Out, Line),
     sub_string(Line, _, _, _, "Primer reset to 0"),
     !,
-    thread_create(log_state, _, [detached(true)]),
+    thread_create(log_state(TX_Port), _, [detached(true)]),
     udp_socket(Socket),
     repeat,
     member(Rudder, [-1.0, 0.0, +1.0]),
@@ -99,15 +90,29 @@ user:udp :-
 %    thread_create(fly_pitch(4), _, [detached(true)]).
 
 
-%!  log_state is det.
+%!  log_state(+Port) is det.
 
-log_state :-
+log_state(Port) :-
     udp_socket(Socket),
-    tcp_bind(Socket, 6011),
+    tcp_bind(Socket, Port),
     repeat,
     udp_receive(Socket, Data, _, [as(term)]),
     format('~q~n', [Data]),
     fail.
+
+
+%! swi_fg_ports(-TX_Port, -RX_Port) is det.
+%
+%   Port directions are from the point of view on FlightGear
+
+swi_fg_ports(5501, 5502).
+
+
+%!  fg_root(-Dir) is det.
+%
+%  Location of FlightGear main data directory
+
+fg_root('/home/mike/.fgfs/fgdata_2024_1').
 
 
 %! steer_heading_on_ground(+Plotter) is det.
@@ -313,30 +318,18 @@ clamped(Expr, Left, Right, Clamped) :-
     ).
 
 
-%!  flightgear_http_connection(-HTTPConnection) is det.
-
-flightgear_http_connection(HTTPConnection) :-
-    py_call('flightgear_python.fg_if':'HTTPConnection'(localhost, 8080, timeout_s=10), HTTPConnection).
-
-
-%!  set_prop(+Property_Path, +HTTP_Conn, +Value) is det.
-
-set_prop(Property_Path, HTTP_Conn, Value) :-
-    py_call(HTTP_Conn:set_prop(Property_Path, Value)).
-
-%!  get_prop(+Property_Path, +HTTP_Conn, -Value) is det.
-
-get_prop(Property_Path, HTTP_Conn, Value) :-
-    py_call(HTTP_Conn:get_prop(Property_Path), Value).
-
-
 %!  pid_plotter(-P) is det.
 
 pid_plotter(P) :-
     new(W, auto_sized_picture('PID')),
     send(W, max_size, size(1800, 600)),
     send(W, display, new(P, plotter)),
-    send(P, axis, plot_axis(x, 0, 200, @default, 1500)),
-    send(P, axis, plot_axis(y, -1, 1, @default, 400)),
+    send(P, axis, plot_axis(x, 0, 200, @(default), 1500)),
+    send(P, axis, plot_axis(y, -1, 1, @(default), 400)),
     send(W, open).
+
+
+
+
+
 
