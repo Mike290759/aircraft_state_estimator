@@ -54,7 +54,13 @@ URL for testing http: /home/mike/Applications/flightgear-2024.1.2-linux-amd64.Ap
 :- use_module(library(sgml_write)).
 :- use_module(library(pairs)).
 :- use_module(library(http/http_client)).
-:- use_module(library(http/json)).
+:- use_module(library(http/http_server)).
+
+
+%!  airport_and_runway(-Airport, -Runway) is det.
+
+airport_and_runway('NZWN', 16).
+
 
 %!  test is det.
 
@@ -68,32 +74,47 @@ user:test :-
     format(string(Generic_TX_Arg), '--generic=socket,out,~w,localhost,~w,udp,swi_fg', [Polling_Frequency, TX_Port]),
     format(string(Generic_RX_Arg), '--generic=socket,in,~w,localhost,~w,udp,swi_fg', [Polling_Frequency, RX_Port]),
     format(string(HTTP_Arg), '--httpd=~w', [HTTP_Port]),
+    airport_and_runway(Airport, Runway),
+    format(string(Airport_Arg), '--airport=~w', [Airport]),
+    format(string(Runway_Arg), '--runway=~w', [Runway]),
     process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
                    [FG_ROOT_Arg, Generic_TX_Arg, Generic_RX_Arg,
                     HTTP_Arg,         % Slow but good for ad hoc gets and sets
-                    '--airport=NZWN',
-                    '--runway=34'],
+                    Airport_Arg,
+                    Runway_Arg],
                    [stderr(pipe(Out))]),
     repeat,
     read_line_to_string(Out, Line),
     sub_string(Line, _, _, _, "Primer reset to 0"),
     !,
-    thread_create(track_aircraft_instruments(TX_Port), _, [detached(true)]),
-    thread_create(send_aircraft_controls(RX_Port), _,  [detached(true)]).
+    pid_plotter(Plotter),
+    align_heading_indicator,
+    http_set_prop('/controls/engines/engine/throttle', 1.0),
+    thread_create(get_udp_properties(TX_Port), _, [detached(true)]),
+    thread_create(send_udp_properties(RX_Port), _,  [detached(true)]),
+    repeat,
+    (   udp_input_properties(_),
+        udp_input_properties(_)
+    ->  !,
+        steer_heading_on_ground(Plotter)
+    ;   sleep(0.1),
+        fail
+    ).
+
 
 %    thread_create(fly_heading(340), _, [detached(true)]),
 %    thread_create(fly_pitch(4), _, [detached(true)]).
 
 
-%!  track_aircraft_instruments(+Port) is det.
+%!  get_udp_properties(+Port) is det.
 %
-%   Maintain a database of the aircraft instruments specified in
+%   Maintain a database of the properties specified in
 %   swi_fg_input/2
 
 :- dynamic
-    aircraft_instruments/1.
+    udp_input_properties/1.
 
-track_aircraft_instruments(Port) :-
+get_udp_properties(Port) :-
     findall(Node_Name, swi_fg_input(Node_Name, _), Node_Names),
     udp_socket(Socket),
     tcp_bind(Socket, Port),
@@ -101,10 +122,10 @@ track_aircraft_instruments(Port) :-
     udp_receive(Socket, Tuple, _, [as(term)]),
     round_to_square_list(Tuple, Values),
     pairs_keys_values(Pairs, Node_Names, Values),
-    dict_pairs(Dict, aircraft_instruments, Pairs),
-    with_mutex(swi_fg_instruments,
-               (   retractall(aircraft_instruments(_)),
-                   assert(aircraft_instruments(Dict)))),
+    dict_pairs(Dict, #, Pairs),
+    with_mutex(swi_fg_input_properties,
+               (   retractall(udp_input_properties(_)),
+                   assert(udp_input_properties(Dict)))),
     fail.
 
 %! round_to_square_list(+Tuple, -List) is det.
@@ -115,42 +136,43 @@ round_to_square_list((A,B), [A|T]) :-
 round_to_square_list(A, [A]).
 
 
-%!  send_aircraft_controls(+RX_Port) is det.
+%!  send_udp_properties(+Port) is det.
 
 :- dynamic
-    aircraft_controls/1.
+    udp_output_properties/1.
 
-send_aircraft_controls(RX_Port) :-
+send_udp_properties(Port) :-
     findall(Node_Name, swi_fg_output(Node_Name, _), Node_Names),
-    initial_control_pairs(Node_Names, Pairs),
-    dict_pairs(Dict, aircraft_controls, Pairs),
-    with_mutex(swi_fg_controls,
-               (   retractall(aircraft_controls(_)),
-                   assert(aircraft_controls(Dict)))),   % Initialise
+    initial_output_pairs(Node_Names, Pairs),
+    dict_pairs(Initial_Dict, #, Pairs),
+    with_mutex(swi_fg_output_properties,
+               (   retractall(udp_output_properties(_)),
+                   assert(udp_output_properties(Initial_Dict)))),   % Initialise
     polling_frequency(Polling_Frequency),
     Polling_Delay is 1 / Polling_Frequency,
     udp_socket(Socket),
     repeat,
-    with_mutex(swi_fg_controls, aircraft_controls(Dict)),
-    control_values(Node_Names, Dict, Node_Values),
+    with_mutex(swi_fg_output_properties, udp_output_properties(Dict)),
+    output_values(Node_Names, Dict, Node_Values),
     atomic_list_concat(Node_Values, ',', Node_Values_Atom),
-    udp_send(Socket, Node_Values_Atom, localhost:RX_Port, [as(string)]),
+    format(atom(Tuple_String), '~w~n', [Node_Values_Atom]),
+    udp_send(Socket, Tuple_String, localhost:Port, []),
     sleep(Polling_Delay),
     fail.
 
 
-%!  control_values(+Node_Names, +Dict, -Values) is det.
+%!  output_values(+Node_Names, +Dict, -Values) is det.
 
-control_values([], _, []).
-control_values([Node_Name|T1], Dict, [Dict.Node_Name|T2]) :-
-    control_values(T1, Dict, T2).
+output_values([], _, []).
+output_values([Node_Name|T1], Dict, [Dict.Node_Name|T2]) :-
+    output_values(T1, Dict, T2).
 
 
-%! initial_control_pairs(+Node_Names, -Pairs) is det.
+%! initial_output_pairs(+Node_Names, -Pairs) is det.
 
-initial_control_pairs([], []).
-initial_control_pairs([Node_Name|T1], [Node_Name-0|T2]) :-
-    initial_control_pairs(T1, T2).
+initial_output_pairs([], []).
+initial_output_pairs([Node_Name|T1], [Node_Name-0|T2]) :-
+    initial_output_pairs(T1, T2).
 
 
 %! udp_ports(-TX_Port, -RX_Port) is det.
@@ -176,7 +198,20 @@ fg_root('/home/mike/.fgfs/fgdata_2024_1').
 %
 %   @arg Frequency Polling frequency in Hz
 
-polling_frequency(10).
+polling_frequency(5).
+
+
+%!  swi_fg_input(-Node_ID:atom, -Format:atom).
+
+swi_fg_input('/instrumentation/heading-indicator/indicated-heading-deg', '%d').
+swi_fg_input('/position/altitude-agl-ft', '%d').
+swi_fg_input('/instrumentation/airspeed-indicator/indicated-speed-kt', '%d').
+swi_fg_input('/instrumentation/attitude-indicator/indicated-pitch-deg', '%d').
+
+%!  swi_fg_output(-Node_ID:atom, -Format:atom).
+
+swi_fg_output('/controls/flight/rudder', '%f').
+swi_fg_output('/controls/flight/elevator-trim', '%f').
 
 
 %!  write_swi_fg_xml_file is det.
@@ -231,52 +266,37 @@ chunk(Direction, Chunk) :-
                      element(node, [], [Node_Name])]).
 
 
-%!  swi_fg_input(-Node_ID:atom, -Format:atom).
-
-swi_fg_input('instrumentation/heading-indicator/indicated-heading-deg', '%d').
-swi_fg_input('position/altitude-agl-ft', '%d').
-swi_fg_input('instrumentation/airspeed-indicator/indicated-speed-kt', '%d').
-swi_fg_input('instrumentation/attitude-indicator/indicated-pitch-deg', '%d').
-
-
-%!  swi_fg_output(-Node_ID:atom, -Format:atom).
-
-swi_fg_output('controls/flight/rudder', '%d').
-
 
 %! steer_heading_on_ground(+Plotter) is det.
 
 steer_heading_on_ground(Plotter) :-
-    P = 0.03,
-    I = 0.03,
-    D = 0.0,
-    Control_Min = -0.5,
-    Control_Max = +0.5,
-    pid_controller(on_ground,                                                               % Guard
-                   required_heading,                                                                   % Setpoint
-                   http_get_prop('/instrumentation/heading-indicator/indicated-heading-deg', HTTP_Conn),    % State_Value
-                   set_prop('/controls/flight/rudder', HTTP_Conn),                                     % Control
-                   direction_difference,                                                               % Error calculation
-                   P,
-                   I,
-                   D,
-                   Control_Min,
-                   Control_Max,
+    pid_controller(on_ground,                                                                 % Guard
+                   required_heading,                                                          % Setpoint
+                   udp_get_prop('/instrumentation/heading-indicator/indicated-heading-deg'),  % State_Value
+                   udp_set_prop('/controls/flight/rudder'),                                   % Control
+                   direction_difference,                                                      % Error calculation
+                   0.1,                                                                       % P
+                   0.1,                                                                       % I
+                   0.0,                                                                       % D
+                   -0.8,                                                                      % Control_Min
+                   +0.8,                                                                      % Control_Max
                    Plotter,
-                   0.1,
+                   0.01,                                                                      % Plotting Y-scale factor
                    green).
 
 
-%!  on_ground(+HTTP_Conn) is semidet.
+%!  on_ground is semidet.
 
-on_ground(HTTP_Conn) :-
-    http_get_prop('/position/altitude-agl-ft', HTTP_Conn, Altitude_AGL_Feet),
-    Altitude_AGL_Feet < 5.
+on_ground :-
+    udp_get_prop('/position/altitude-agl-ft', Altitude_AGL_Feet),
+    Altitude_AGL_Feet < 30.  % Need to set the QNH!
 
 
 %!  required_heading(-Heading) is det.
 
-required_heading(338).
+required_heading(Heading) :-
+    airport_and_runway(_, Runway),
+    Heading is 10 * Runway.
 
 
 %!  fly_heading is det.
@@ -287,12 +307,11 @@ fly_heading(Plotter) :-
     D = 0.0,
     Control_Min = -0.5,
     Control_Max = +0.5,
-    flightgear_http_connection(HTTP_Conn),
-    pid_controller(\+ on_ground(HTTP_Conn),                                                            % Guard
-                   required_heading,                                                                   % Setpoint
-                   http_get_prop('/instrumentation/heading-indicator/indicated-heading-deg', HTTP_Conn),    % State_Value
-                   set_prop('/controls/flight/aileron', HTTP_Conn),                                    % Control
-                   direction_difference,                                                               % Error calculation
+    pid_controller(\+ on_ground,                                                                % Guard
+                   required_heading,                                                            % Setpoint
+                   udp_get_prop('/instrumentation/heading-indicator/indicated-heading-deg'),    % State_Value
+                   udp_set_prop('/controls/flight/aileron'),                                    % Control
+                   direction_difference,                                                        % Error calculation
                    P,
                    I,
                    D,
@@ -311,12 +330,11 @@ fly_heading(Plotter) :-
 %   Positive elevator-trim puts nose down
 
 fly_pitch(Required_Pitch_Deg) :-
-    flightgear_http_connection(HTTP_Conn),
     Sample_Time = 0.2,
     repeat,
     sleep(Sample_Time),
-    http_get_prop('/instrumentation/airspeed-indicator/indicated-speed-kt', HTTP_Conn, Indicated_Speed_KT),
-    http_get_prop('/instrumentation/attitude-indicator/indicated-pitch-deg', HTTP_Conn, Indicated_Pitch_Deg),
+    udp_get_prop('/instrumentation/airspeed-indicator/indicated-speed-kt', Indicated_Speed_KT),
+    udp_get_prop('/instrumentation/attitude-indicator/indicated-pitch-deg', Indicated_Pitch_Deg),
     writeln(ias(Indicated_Speed_KT)),
     (   Indicated_Speed_KT < 50
     ->  Required_Pitch_Deg_1 = 4
@@ -325,7 +343,7 @@ fly_pitch(Required_Pitch_Deg) :-
     Pitch_Error is Indicated_Pitch_Deg - Required_Pitch_Deg_1,   % +ve if pitch too high
     clamped(0.3 * Pitch_Error * Sample_Time, -0.5, +0.5, New_Elevator_Trim),
     writeln(fly_pitch(pitch(Indicated_Pitch_Deg), pitch_error(Pitch_Error), elevator_trim(New_Elevator_Trim))),
-    set_prop('/controls/flight/elevator-trim', HTTP_Conn, New_Elevator_Trim),
+    udp_set_prop('/controls/flight/elevator-trim', New_Elevator_Trim),
     fail.
 
 
@@ -378,7 +396,7 @@ align_heading_indicator :-
 %   @arg Plot_Colour colour of the plot line
 
 :- meta_predicate
-    pid_controller(:, :, :, :, :, +, +, +, +, +, +, +, +).
+    pid_controller(0, 1, 1, 1, 3, +, +, +, +, +, +, +, +).
 
 pid_controller(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Control_Min, Control_Max, Plotter, Plot_Scale_Y, Plot_Colour) :-
     send(Plotter, graph, new(Plot_Graph, plot_graph)),
@@ -396,7 +414,7 @@ pid_controller(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred,
 %!                  +Previous_Error, +Elapsed_Time) is det.
 
 :- meta_predicate
-    pid_controller_1(:, :, :, :, :, +, +, +, +, +, +, +, +, +, +, +).
+    pid_controller_1(0, 1, 1, 1, 3, +, +, +, +, +, +, +, +, +, +, +).
 
 pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Control_Min, Control_Max, Plot_Graph, Plot_Scale_Y, Sample_Time, Error_Sum, Previous_Error, Elapsed_Time) :-
     (   Guard
@@ -407,6 +425,7 @@ pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pre
         send(Plot_Graph, append, Elapsed_Time, Graph_Y),
         Error_Sum_1 is Error_Sum + Error,
         clamped(P * Error + I * Error_Sum * Sample_Time + D * (Error - Previous_Error) / Sample_Time, Control_Min, Control_Max, Control),
+        writeln(P * Error + I * Error_Sum * Sample_Time),
         call(Control_Pred, Control)
     ;   Error_Sum_1 = Error_Sum,
         Error = Previous_Error
@@ -421,7 +440,7 @@ pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pre
 %
 %   @arg Sample_Time float sample time in seconds
 
-sample_time(0.2).
+sample_time(0.3).
 
 
 
@@ -445,6 +464,22 @@ clamped(Expr, Left, Right, Clamped) :-
     ).
 
 
+%!  udp_get_prop(+Property_Path, -Value) is det.
+
+udp_get_prop(Property_Path, Value) :-
+    with_mutex(swi_fg_input_properties, udp_input_properties(DICT)),
+    Value = DICT.Property_Path.
+
+
+%!  udp_set_prop(+Property_Path, +Value) is det.
+
+udp_set_prop(Property_Path, Value) :-
+    with_mutex(swi_fg_output_properties,
+               (   retract(udp_output_properties(DICT_IN)),
+                   get_dict(Property_Path, DICT_IN, _, DICT_OUT, Value),
+                   assert(udp_output_properties(DICT_OUT)))).
+
+
 %!  http_get_prop(+Property_Path, -Value) is det.
 
 http_get_prop(Property_Path, Value) :-
@@ -462,7 +497,7 @@ http_set_prop(Property_Path, Value) :-
     URL = [protocol(http), host(localhost), port(Port), path(Path)],
     http_get(URL, json(JSON), []),
     memberchk(type=Type, JSON),
-    http_post(URL, json(#{path:Property_Path, type:Type, value:Value}), X, []).
+    http_post(URL, json(#{path:Property_Path, type:Type, value:Value}), _, []).
 
 
 %!  pid_plotter(-P) is det.
