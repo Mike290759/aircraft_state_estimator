@@ -36,11 +36,11 @@ Uses the "generic" protocol to specify the format of data exchanged
 between Prolog and FlightGear Flight Simulator. See
 https://wiki.flightgear.org/Generic_protocol#Input/Output_Parameters
 
-Put generic_test.xml in	/home/mike/.fgfs/fgdata_2024_1/Protocol
-
 Initally used the Python interface to FlightGear via Janus but this
 proved complex and an issue with an uninitialised stdout stream on the
 sub-process used for the socket interface was never resolved.
+
+URL for testing http: /home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage --httpd=8080 --fg-root=/home/mike/.fgfs/fgdata_2024_1
 */
 
 :- use_module(library(socket)).
@@ -53,22 +53,24 @@ sub-process used for the socket interface was never resolved.
 :- use_module(library(readutil)).
 :- use_module(library(sgml_write)).
 :- use_module(library(pairs)).
+:- use_module(library(http/http_client)).
+:- use_module(library(http/json)).
 
+%!  test is det.
 
-%!  udp is det.
-%
-%   @todo Make the polling frequency a fact
-
-user:udp :-
+user:test :-
     write_swi_fg_xml_file,  % Supply the specification of the SWI/FG interface to FG
     fg_root(FG_ROOT),
     format(string(FG_ROOT_Arg), '--fg-root=~w', [FG_ROOT]),
-    swi_fg_ports(TX_Port, RX_Port),
-    format(string(Generic_TX_Arg), '--generic=socket,out,1,localhost,~w,udp,swi_fg', [TX_Port]),
-    format(string(Generic_RX_Arg), '--generic=socket,in,1,localhost,~w,udp,swi_fg', [RX_Port]),
-     process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
+    udp_ports(TX_Port, RX_Port),
+    http_port(HTTP_Port),
+    polling_frequency(Polling_Frequency),
+    format(string(Generic_TX_Arg), '--generic=socket,out,~w,localhost,~w,udp,swi_fg', [Polling_Frequency, TX_Port]),
+    format(string(Generic_RX_Arg), '--generic=socket,in,~w,localhost,~w,udp,swi_fg', [Polling_Frequency, RX_Port]),
+    format(string(HTTP_Arg), '--httpd=~w', [HTTP_Port]),
+    process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
                    [FG_ROOT_Arg, Generic_TX_Arg, Generic_RX_Arg,
-                    '--httpd=8080',   % Slow but good for ad hoc gets and sets
+                    HTTP_Arg,         % Slow but good for ad hoc gets and sets
                     '--airport=NZWN',
                     '--runway=34'],
                    [stderr(pipe(Out))]),
@@ -76,35 +78,33 @@ user:udp :-
     read_line_to_string(Out, Line),
     sub_string(Line, _, _, _, "Primer reset to 0"),
     !,
-    thread_create(track_aircraft_state(TX_Port), _, [detached(true)]),
-    udp_socket(Socket),
-    repeat,
-    member(Rudder, [-1.0, 0.0, +1.0]),
-    format(string(Payload), '~q~n', [Rudder]),
-    udp_send(Socket, Payload, localhost:RX_Port, [as(string)]),
-    sleep(1),
-    fail.
-
+    thread_create(track_aircraft_instruments(TX_Port), _, [detached(true)]),
+    thread_create(send_aircraft_controls(RX_Port), _,  [detached(true)]).
 
 %    thread_create(fly_heading(340), _, [detached(true)]),
 %    thread_create(fly_pitch(4), _, [detached(true)]).
 
 
-%!  track_aircraft_state(+Port) is det.
+%!  track_aircraft_instruments(+Port) is det.
 %
-%   Maintain a database of the aircraft data specified in
+%   Maintain a database of the aircraft instruments specified in
 %   swi_fg_input/2
 
-track_aircraft_state(Port) :-
+:- dynamic
+    aircraft_instruments/1.
+
+track_aircraft_instruments(Port) :-
+    findall(Node_Name, swi_fg_input(Node_Name, _), Node_Names),
     udp_socket(Socket),
     tcp_bind(Socket, Port),
     repeat,
     udp_receive(Socket, Tuple, _, [as(term)]),
-    findall(Node_Name, swi_fg_input(Node_Name, _), Node_Names),
     round_to_square_list(Tuple, Values),
     pairs_keys_values(Pairs, Node_Names, Values),
-    dict_pairs(Dict, aircraft_state, Pairs),
-    format('~q~n', [Dict]),
+    dict_pairs(Dict, aircraft_instruments, Pairs),
+    with_mutex(swi_fg_instruments,
+               (   retractall(aircraft_instruments(_)),
+                   assert(aircraft_instruments(Dict)))),
     fail.
 
 %! round_to_square_list(+Tuple, -List) is det.
@@ -114,11 +114,55 @@ round_to_square_list((A,B), [A|T]) :-
     round_to_square_list(B, T).
 round_to_square_list(A, [A]).
 
-%! swi_fg_ports(-TX_Port, -RX_Port) is det.
-%
-%   Port directions are from the point of view on FlightGear
 
-swi_fg_ports(5501, 5502).
+%!  send_aircraft_controls(+RX_Port) is det.
+
+:- dynamic
+    aircraft_controls/1.
+
+send_aircraft_controls(RX_Port) :-
+    findall(Node_Name, swi_fg_output(Node_Name, _), Node_Names),
+    initial_control_pairs(Node_Names, Pairs),
+    dict_pairs(Dict, aircraft_controls, Pairs),
+    with_mutex(swi_fg_controls,
+               (   retractall(aircraft_controls(_)),
+                   assert(aircraft_controls(Dict)))),   % Initialise
+    polling_frequency(Polling_Frequency),
+    Polling_Delay is 1 / Polling_Frequency,
+    udp_socket(Socket),
+    repeat,
+    with_mutex(swi_fg_controls, aircraft_controls(Dict)),
+    control_values(Node_Names, Dict, Node_Values),
+    atomic_list_concat(Node_Values, ',', Node_Values_Atom),
+    udp_send(Socket, Node_Values_Atom, localhost:RX_Port, [as(string)]),
+    sleep(Polling_Delay),
+    fail.
+
+
+%!  control_values(+Node_Names, +Dict, -Values) is det.
+
+control_values([], _, []).
+control_values([Node_Name|T1], Dict, [Dict.Node_Name|T2]) :-
+    control_values(T1, Dict, T2).
+
+
+%! initial_control_pairs(+Node_Names, -Pairs) is det.
+
+initial_control_pairs([], []).
+initial_control_pairs([Node_Name|T1], [Node_Name-0|T2]) :-
+    initial_control_pairs(T1, T2).
+
+
+%! udp_ports(-TX_Port, -RX_Port) is det.
+%
+%   Port directions are from the point of view of FlightGear
+
+udp_ports(5501, 5502).
+
+
+%!  http_port(-Port) is det.
+
+http_port(8080).
 
 
 %!  fg_root(-Dir) is det.
@@ -126,6 +170,13 @@ swi_fg_ports(5501, 5502).
 %  Location of FlightGear main data directory
 
 fg_root('/home/mike/.fgfs/fgdata_2024_1').
+
+
+%!  polling_frequency(-Frequency) is det.
+%
+%   @arg Frequency Polling frequency in Hz
+
+polling_frequency(10).
 
 
 %!  write_swi_fg_xml_file is det.
@@ -201,10 +252,9 @@ steer_heading_on_ground(Plotter) :-
     D = 0.0,
     Control_Min = -0.5,
     Control_Max = +0.5,
-    flightgear_http_connection(HTTP_Conn),
-    pid_controller(on_ground(HTTP_Conn),                                                               % Guard
+    pid_controller(on_ground,                                                               % Guard
                    required_heading,                                                                   % Setpoint
-                   get_prop('/instrumentation/heading-indicator/indicated-heading-deg', HTTP_Conn),    % State_Value
+                   http_get_prop('/instrumentation/heading-indicator/indicated-heading-deg', HTTP_Conn),    % State_Value
                    set_prop('/controls/flight/rudder', HTTP_Conn),                                     % Control
                    direction_difference,                                                               % Error calculation
                    P,
@@ -220,7 +270,7 @@ steer_heading_on_ground(Plotter) :-
 %!  on_ground(+HTTP_Conn) is semidet.
 
 on_ground(HTTP_Conn) :-
-    get_prop('/position/altitude-agl-ft', HTTP_Conn, Altitude_AGL_Feet),
+    http_get_prop('/position/altitude-agl-ft', HTTP_Conn, Altitude_AGL_Feet),
     Altitude_AGL_Feet < 5.
 
 
@@ -240,7 +290,7 @@ fly_heading(Plotter) :-
     flightgear_http_connection(HTTP_Conn),
     pid_controller(\+ on_ground(HTTP_Conn),                                                            % Guard
                    required_heading,                                                                   % Setpoint
-                   get_prop('/instrumentation/heading-indicator/indicated-heading-deg', HTTP_Conn),    % State_Value
+                   http_get_prop('/instrumentation/heading-indicator/indicated-heading-deg', HTTP_Conn),    % State_Value
                    set_prop('/controls/flight/aileron', HTTP_Conn),                                    % Control
                    direction_difference,                                                               % Error calculation
                    P,
@@ -265,8 +315,8 @@ fly_pitch(Required_Pitch_Deg) :-
     Sample_Time = 0.2,
     repeat,
     sleep(Sample_Time),
-    get_prop('/instrumentation/airspeed-indicator/indicated-speed-kt', HTTP_Conn, Indicated_Speed_KT),
-    get_prop('/instrumentation/attitude-indicator/indicated-pitch-deg', HTTP_Conn, Indicated_Pitch_Deg),
+    http_get_prop('/instrumentation/airspeed-indicator/indicated-speed-kt', HTTP_Conn, Indicated_Speed_KT),
+    http_get_prop('/instrumentation/attitude-indicator/indicated-pitch-deg', HTTP_Conn, Indicated_Pitch_Deg),
     writeln(ias(Indicated_Speed_KT)),
     (   Indicated_Speed_KT < 50
     ->  Required_Pitch_Deg_1 = 4
@@ -284,13 +334,12 @@ fly_pitch(Required_Pitch_Deg) :-
 %   Align the DI with the magnetic compass
 
 align_heading_indicator :-
-    flightgear_http_connection(HTTP_Conn),
-    get_prop('/instrumentation/magnetic-compass/indicated-heading-deg', HTTP_Conn, Magnetic_Compass_Indicated_Heading),
-    get_prop('/instrumentation/heading-indicator/indicated-heading-deg', HTTP_Conn, Unaligned_Indicated_Heading),
-    get_prop('/instrumentation/heading-indicator/align-deg', HTTP_Conn, Initial_Align_Deg),
+    http_get_prop('/instrumentation/magnetic-compass/indicated-heading-deg', Magnetic_Compass_Indicated_Heading),
+    http_get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Unaligned_Indicated_Heading),
+    http_get_prop('/instrumentation/heading-indicator/align-deg', Initial_Align_Deg),
     direction_difference(Magnetic_Compass_Indicated_Heading, Unaligned_Indicated_Heading, Heading_Indicator_Alignment_Error),
     Align_Deg is integer(Initial_Align_Deg + Heading_Indicator_Alignment_Error) mod 360,
-    set_prop('/instrumentation/heading-indicator/align-deg', HTTP_Conn, Align_Deg).
+    http_set_prop('/instrumentation/heading-indicator/align-deg', Align_Deg).
 
 
 %!  pid_controller(:Guard, :Setpoint_Pred, :State_Value_Pred,
@@ -395,21 +444,26 @@ clamped(Expr, Left, Right, Clamped) :-
     ;   Clamped = X
     ).
 
-%!  flightgear_http_connection(-HTTPConnection) is det.
 
-flightgear_http_connection(HTTPConnection) :-
-    py_call('flightgear_python.fg_if':'HTTPConnection'(localhost, 8080, timeout_s=10), HTTPConnection).
+%!  http_get_prop(+Property_Path, -Value) is det.
+
+http_get_prop(Property_Path, Value) :-
+    http_port(Port),
+    format(atom(Path), '/json/~w', [Property_Path]),
+    http_get([protocol(http), host(localhost), port(Port), path(Path)], json(JSON), []),
+    memberchk(value=Value, JSON).
 
 
-%!  set_prop(+Property_Path, +HTTP_Conn, +Value) is det.
+%!  http_set_prop(+Property_Path, +Value) is det.
 
-set_prop(Property_Path, HTTP_Conn, Value) :-
-    py_call(HTTP_Conn:set_prop(Property_Path, Value)).
+http_set_prop(Property_Path, Value) :-
+    http_port(Port),
+    format(atom(Path), '/json/~w', [Property_Path]),
+    URL = [protocol(http), host(localhost), port(Port), path(Path)],
+    http_get(URL, json(JSON), []),
+    memberchk(type=Type, JSON),
+    http_post(URL, json(#{path:Property_Path, type:Type, value:Value}), X, []).
 
-%!  get_prop(+Property_Path, +HTTP_Conn, -Value) is det.
-
-get_prop(Property_Path, HTTP_Conn, Value) :-
-    py_call(HTTP_Conn:get_prop(Property_Path), Value).
 
 %!  pid_plotter(-P) is det.
 
