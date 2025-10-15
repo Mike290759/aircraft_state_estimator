@@ -40,7 +40,8 @@ Initally used the Python interface to FlightGear via Janus but this
 proved complex and an issue with an uninitialised stdout stream on the
 sub-process used for the socket interface was never resolved.
 
-URL for testing http: /home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage --httpd=8080 --fg-root=/home/mike/.fgfs/fgdata_2024_1
+URL for testing http:
+/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage --httpd=8080 --fg-root=/home/mike/.fgfs/fgdata_2024_1 --airport=NZWN --runway=34
 */
 
 :- use_module(library(socket)).
@@ -59,7 +60,7 @@ URL for testing http: /home/mike/Applications/flightgear-2024.1.2-linux-amd64.Ap
 
 %!  airport_and_runway(-Airport, -Runway) is det.
 
-airport_and_runway('NZWN', 16).
+airport_and_runway('NZWN', 34).
 
 
 %!  test is det.
@@ -81,14 +82,17 @@ user:test :-
                    [FG_ROOT_Arg, Generic_TX_Arg, Generic_RX_Arg,
                     HTTP_Arg,         % Slow but good for ad hoc gets and sets
                     Airport_Arg,
-                    Runway_Arg],
+                    Runway_Arg,
+                   '--disable-ai-traffic'],
                    [stderr(pipe(Out))]),
     repeat,
     read_line_to_string(Out, Line),
     sub_string(Line, _, _, _, "Primer reset to 0"),
     !,
+    http_set_prop('/sim/current-view/view-number', 1),
     pid_plotter(Plotter),
     align_heading_indicator,
+    set_brakes(1.0),
     http_set_prop('/controls/engines/engine/throttle', 1.0),
     thread_create(get_udp_properties(TX_Port), _, [detached(true)]),
     thread_create(send_udp_properties(RX_Port), _,  [detached(true)]),
@@ -96,6 +100,8 @@ user:test :-
     (   udp_input_properties(_),
         udp_input_properties(_)
     ->  !,
+        cycle_rudder,   % Look at the GUI to confirm that the ruidder moves
+        set_brakes(0.05),
         steer_heading_on_ground(Plotter)
     ;   sleep(0.1),
         fail
@@ -109,13 +115,13 @@ user:test :-
 %!  get_udp_properties(+Port) is det.
 %
 %   Maintain a database of the properties specified in
-%   swi_fg_input/2
+%   swi_fg_input/3 in the fact udp_input_properties/1
 
 :- dynamic
     udp_input_properties/1.
 
 get_udp_properties(Port) :-
-    findall(Node_Name, swi_fg_input(Node_Name, _), Node_Names),
+    findall(Node_Name, swi_fg_input(Node_Name, _, _), Node_Names),
     udp_socket(Socket),
     tcp_bind(Socket, Port),
     repeat,
@@ -142,7 +148,7 @@ round_to_square_list(A, [A]).
     udp_output_properties/1.
 
 send_udp_properties(Port) :-
-    findall(Node_Name, swi_fg_output(Node_Name, _), Node_Names),
+    findall(Node_Name, swi_fg_output(Node_Name, _, _), Node_Names),
     initial_output_pairs(Node_Names, Pairs),
     dict_pairs(Initial_Dict, #, Pairs),
     with_mutex(swi_fg_output_properties,
@@ -171,7 +177,12 @@ output_values([Node_Name|T1], Dict, [Dict.Node_Name|T2]) :-
 %! initial_output_pairs(+Node_Names, -Pairs) is det.
 
 initial_output_pairs([], []).
-initial_output_pairs([Node_Name|T1], [Node_Name-0|T2]) :-
+initial_output_pairs([Node_Name|T1], [Node_Name-Value|T2]) :-
+    swi_fg_output(Node_Name, Type, _),
+    (   Type == float
+    ->  Value = 0.0
+    ;   Value = 0
+    ),
     initial_output_pairs(T1, T2).
 
 
@@ -201,17 +212,18 @@ fg_root('/home/mike/.fgfs/fgdata_2024_1').
 polling_frequency(5).
 
 
-%!  swi_fg_input(-Node_ID:atom, -Format:atom).
+%!  swi_fg_input(-Node_ID:atom, -Type, -Format:atom).
 
-swi_fg_input('/instrumentation/heading-indicator/indicated-heading-deg', '%d').
-swi_fg_input('/position/altitude-agl-ft', '%d').
-swi_fg_input('/instrumentation/airspeed-indicator/indicated-speed-kt', '%d').
-swi_fg_input('/instrumentation/attitude-indicator/indicated-pitch-deg', '%d').
+swi_fg_input('/instrumentation/heading-indicator/indicated-heading-deg', int, '%d').
+swi_fg_input('/position/altitude-agl-ft', int, '%d').
+swi_fg_input('/instrumentation/airspeed-indicator/indicated-speed-kt', int, '%d').
+swi_fg_input('/instrumentation/attitude-indicator/indicated-pitch-deg', int, '%d').
 
-%!  swi_fg_output(-Node_ID:atom, -Format:atom).
 
-swi_fg_output('/controls/flight/rudder', '%f').
-swi_fg_output('/controls/flight/elevator-trim', '%f').
+%!  swi_fg_output(-Node_ID:atom, -Type, -Format:atom).
+
+swi_fg_output('/controls/flight/rudder', float, '%f').
+swi_fg_output('/controls/flight/elevator-trim', float, '%f').
 
 
 %!  write_swi_fg_xml_file is det.
@@ -254,14 +266,15 @@ swi_fg_xml_write_1(Out) :-
 
 chunk(Direction, Chunk) :-
     (   Direction == input
-    ->  swi_fg_input(Node_Name, Format)
+    ->  swi_fg_input(Node_Name, Type, Format)
 
     ;   Direction == output
-    ->  swi_fg_output(Node_Name, Format)
+    ->  swi_fg_output(Node_Name, Type, Format)
     ),
     Chunk = element(chunk,
                     [],
                     [element(name, [], [Node_Name]),
+                     element(type, [], [Type]),
                      element(format, [], [Format]),
                      element(node, [], [Node_Name])]).
 
@@ -275,14 +288,31 @@ steer_heading_on_ground(Plotter) :-
                    udp_get_prop('/instrumentation/heading-indicator/indicated-heading-deg'),  % State_Value
                    udp_set_prop('/controls/flight/rudder'),                                   % Control
                    direction_difference,                                                      % Error calculation
-                   0.1,                                                                       % P
-                   0.1,                                                                       % I
+                   0.04,                                                                      % P
+                   0.0,                                                                      % I
                    0.0,                                                                       % D
-                   -0.8,                                                                      % Control_Min
-                   +0.8,                                                                      % Control_Max
+                   -1.0,                                                                      % Control_Min
+                   +1.0,                                                                      % Control_Max
                    Plotter,
                    0.01,                                                                      % Plotting Y-scale factor
                    green).
+
+%!  set_brakes(+Value) is det.
+
+set_brakes(Value) :-
+    http_set_prop('/controls/gear/brake-left', Value),
+    http_set_prop('/controls/gear/brake-right', Value).
+
+
+%!  cycle_rudder is det.
+
+cycle_rudder :-
+    between(1, 2, _),
+    member(Rudder, [-0.8, 0.0, 0.8, 0.0]),
+    udp_set_prop('/controls/flight/rudder', Rudder),
+    sleep(1.0),
+    fail.
+cycle_rudder.
 
 
 %!  on_ground is semidet.
@@ -335,14 +365,12 @@ fly_pitch(Required_Pitch_Deg) :-
     sleep(Sample_Time),
     udp_get_prop('/instrumentation/airspeed-indicator/indicated-speed-kt', Indicated_Speed_KT),
     udp_get_prop('/instrumentation/attitude-indicator/indicated-pitch-deg', Indicated_Pitch_Deg),
-    writeln(ias(Indicated_Speed_KT)),
     (   Indicated_Speed_KT < 50
     ->  Required_Pitch_Deg_1 = 4
     ;   Required_Pitch_Deg_1 = Required_Pitch_Deg
     ),
     Pitch_Error is Indicated_Pitch_Deg - Required_Pitch_Deg_1,   % +ve if pitch too high
     clamped(0.3 * Pitch_Error * Sample_Time, -0.5, +0.5, New_Elevator_Trim),
-    writeln(fly_pitch(pitch(Indicated_Pitch_Deg), pitch_error(Pitch_Error), elevator_trim(New_Elevator_Trim))),
     udp_set_prop('/controls/flight/elevator-trim', New_Elevator_Trim),
     fail.
 
@@ -357,7 +385,9 @@ align_heading_indicator :-
     http_get_prop('/instrumentation/heading-indicator/align-deg', Initial_Align_Deg),
     direction_difference(Magnetic_Compass_Indicated_Heading, Unaligned_Indicated_Heading, Heading_Indicator_Alignment_Error),
     Align_Deg is integer(Initial_Align_Deg + Heading_Indicator_Alignment_Error) mod 360,
-    http_set_prop('/instrumentation/heading-indicator/align-deg', Align_Deg).
+    http_set_prop('/instrumentation/heading-indicator/align-deg', Align_Deg),
+    http_get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Heading_Indicator_Heading),
+    format('Magnetic heading=~w, Heading Indicator heading=~w~n', [Magnetic_Compass_Indicated_Heading, Heading_Indicator_Heading]).
 
 
 %!  pid_controller(:Guard, :Setpoint_Pred, :State_Value_Pred,
@@ -425,7 +455,6 @@ pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pre
         send(Plot_Graph, append, Elapsed_Time, Graph_Y),
         Error_Sum_1 is Error_Sum + Error,
         clamped(P * Error + I * Error_Sum * Sample_Time + D * (Error - Previous_Error) / Sample_Time, Control_Min, Control_Max, Control),
-        writeln(P * Error + I * Error_Sum * Sample_Time),
         call(Control_Pred, Control)
     ;   Error_Sum_1 = Error_Sum,
         Error = Previous_Error
@@ -445,6 +474,8 @@ sample_time(0.3).
 
 
 %!  direction_difference(+H1, +H2, -Diff) is det.
+%
+%   Diff = H1 - H2
 %
 %   @arg Diff [-180, +180]
 
