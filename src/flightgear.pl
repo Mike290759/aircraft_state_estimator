@@ -94,189 +94,15 @@ user:test :-
     align_heading_indicator,
     set_brakes(1.0),
     http_set_prop('/controls/engines/engine/throttle', 1.0),
-    thread_create(get_udp_properties(TX_Port), _, [detached(true)]),
-    thread_create(send_udp_properties(RX_Port), _,  [detached(true)]),
-    repeat,
-    (   udp_input_properties(_),
-        udp_input_properties(_)
-    ->  !,
-        cycle_rudder,   % Look at the GUI to confirm that the ruidder moves
-        set_brakes(0.05),
-        steer_heading_on_ground(Plotter)
-    ;   sleep(0.1),
-        fail
-    ).
+    start_flightgear_udp_interface,  % Blocks until first tuple received from FlightGear
+    cycle_rudder,   % Look at the GUI to confirm that the ruidder moves
+    set_brakes(0.0),
+    steer_heading_on_ground(Plotter).
+
 
 
 %    thread_create(fly_heading(340), _, [detached(true)]),
 %    thread_create(fly_pitch(4), _, [detached(true)]).
-
-
-%!  get_udp_properties(+Port) is det.
-%
-%   Maintain a database of the properties specified in
-%   swi_fg_input/3 in the fact udp_input_properties/1
-
-:- dynamic
-    udp_input_properties/1.
-
-get_udp_properties(Port) :-
-    findall(Node_Name, swi_fg_input(Node_Name, _, _), Node_Names),
-    udp_socket(Socket),
-    tcp_bind(Socket, Port),
-    repeat,
-    udp_receive(Socket, Tuple, _, [as(term)]),
-    round_to_square_list(Tuple, Values),
-    pairs_keys_values(Pairs, Node_Names, Values),
-    dict_pairs(Dict, #, Pairs),
-    with_mutex(swi_fg_input_properties,
-               (   retractall(udp_input_properties(_)),
-                   assert(udp_input_properties(Dict)))),
-    fail.
-
-%! round_to_square_list(+Tuple, -List) is det.
-
-round_to_square_list((A,B), [A|T]) :-
-    !,
-    round_to_square_list(B, T).
-round_to_square_list(A, [A]).
-
-
-%!  send_udp_properties(+Port) is det.
-
-:- dynamic
-    udp_output_properties/1.
-
-send_udp_properties(Port) :-
-    findall(Node_Name, swi_fg_output(Node_Name, _, _), Node_Names),
-    initial_output_pairs(Node_Names, Pairs),
-    dict_pairs(Initial_Dict, #, Pairs),
-    with_mutex(swi_fg_output_properties,
-               (   retractall(udp_output_properties(_)),
-                   assert(udp_output_properties(Initial_Dict)))),   % Initialise
-    polling_frequency(Polling_Frequency),
-    Polling_Delay is 1 / Polling_Frequency,
-    udp_socket(Socket),
-    repeat,
-    with_mutex(swi_fg_output_properties, udp_output_properties(Dict)),
-    output_values(Node_Names, Dict, Node_Values),
-    atomic_list_concat(Node_Values, ',', Node_Values_Atom),
-    format(atom(Tuple_String), '~w~n', [Node_Values_Atom]),
-    udp_send(Socket, Tuple_String, localhost:Port, []),
-    sleep(Polling_Delay),
-    fail.
-
-
-%!  output_values(+Node_Names, +Dict, -Values) is det.
-
-output_values([], _, []).
-output_values([Node_Name|T1], Dict, [Dict.Node_Name|T2]) :-
-    output_values(T1, Dict, T2).
-
-
-%! initial_output_pairs(+Node_Names, -Pairs) is det.
-
-initial_output_pairs([], []).
-initial_output_pairs([Node_Name|T1], [Node_Name-Value|T2]) :-
-    swi_fg_output(Node_Name, Type, _),
-    (   Type == float
-    ->  Value = 0.0
-    ;   Value = 0
-    ),
-    initial_output_pairs(T1, T2).
-
-
-%! udp_ports(-TX_Port, -RX_Port) is det.
-%
-%   Port directions are from the point of view of FlightGear
-
-udp_ports(5501, 5502).
-
-
-%!  http_port(-Port) is det.
-
-http_port(8080).
-
-
-%!  fg_root(-Dir) is det.
-%
-%  Location of FlightGear main data directory
-
-fg_root('/home/mike/.fgfs/fgdata_2024_1').
-
-
-%!  polling_frequency(-Frequency) is det.
-%
-%   @arg Frequency Polling frequency in Hz
-
-polling_frequency(5).
-
-
-%!  swi_fg_input(-Node_ID:atom, -Type, -Format:atom).
-
-swi_fg_input('/instrumentation/heading-indicator/indicated-heading-deg', int, '%d').
-swi_fg_input('/position/altitude-agl-ft', int, '%d').
-swi_fg_input('/instrumentation/airspeed-indicator/indicated-speed-kt', int, '%d').
-swi_fg_input('/instrumentation/attitude-indicator/indicated-pitch-deg', int, '%d').
-
-
-%!  swi_fg_output(-Node_ID:atom, -Type, -Format:atom).
-
-swi_fg_output('/controls/flight/rudder', float, '%f').
-swi_fg_output('/controls/flight/elevator-trim', float, '%f').
-
-
-%!  write_swi_fg_xml_file is det.
-%
-%   Write the XML file that specifies the data to be read and written by
-%   the FlightGear "generic" (UDP) interface
-
-write_swi_fg_xml_file :-
-    fg_root(FG_Root),
-    format(string(Dir), '~w/Protocol', [FG_Root]),
-    directory_file_path(Dir, 'swi_fg.xml', Path),
-    setup_call_cleanup(open(Path, write, Out),
-                       swi_fg_xml_write_1(Out),
-                       close(Out)).
-
-
-%!  swi_fg_xml_write_1(+Out:stream) is det.
-
-swi_fg_xml_write_1(Out) :-
-    findall(Chunk, chunk(input, Chunk), Output_Chunks),   % Inputs to FG are outputs from SWI
-    findall(Chunk, chunk(output, Chunk), Input_Chunks),
-    DOM = [element('PropertyList',
-                   [],
-                   [element(generic,
-                            [],
-                            [element(output,
-                                     [],
-                                     [element(line_separator,[],[newline]),
-                                      element(var_separator,[],[',']),
-                                      element(binary_mode,[], [false])|Output_Chunks]),
-                            element(input,
-                                     [],
-                                     [element(line_separator,[],[newline]),
-                                      element(var_separator,[],[',']),
-                                      element(binary_mode,[], [false])|Input_Chunks])])])],
-    xml_write(Out, DOM, []).
-
-
-%!  chunk(+Direction, -Chunk) is nondet.
-
-chunk(Direction, Chunk) :-
-    (   Direction == input
-    ->  swi_fg_input(Node_Name, Type, Format)
-
-    ;   Direction == output
-    ->  swi_fg_output(Node_Name, Type, Format)
-    ),
-    Chunk = element(chunk,
-                    [],
-                    [element(name, [], [Node_Name]),
-                     element(type, [], [Type]),
-                     element(format, [], [Format]),
-                     element(node, [], [Node_Name])]).
 
 
 
@@ -495,20 +321,223 @@ clamped(Expr, Left, Right, Clamped) :-
     ).
 
 
+%!  start_flightgea_udp__interface is det.
+
+start_flightgear_udp_interface :-
+    udp_ports(TX_Port, RX_Port),
+    initialise_output_property_facts,
+    thread_create(send_udp_properties(RX_Port), _,  [detached(true)]),
+    thread_create(listen_for_udp_properties(TX_Port), _, [detached(true)]),
+    repeat,
+    flag(udp_rx_message_count, N, N),
+    (   N > 0    % Wait for first record from FlightGear
+    ->  !
+    ;   sleep(0.2)
+    ).
+
+
+%!  listen_for_udp_properties(+Port) is det.
+%
+%   Maintain a database of the properties specified in
+%   swi_fg_input/3. Each property is stored in its own fact named
+%   after the property path.
+
+listen_for_udp_properties(Port) :-
+    findall(Property_Path, swi_fg_input(Property_Path, _, _), Property_Paths),
+    udp_socket(Socket),
+    tcp_bind(Socket, Port),
+    repeat,
+    udp_receive(Socket, Tuple, _, [as(term)]),
+    round_to_square_list(Tuple, Values),
+    pairs_keys_values(Pairs, Property_Paths, Values),
+    forall(member(Property_Path-Value, Pairs),
+           with_mutex(Property_Path,
+                      (   functor(Fact, Property_Path, 1),
+                          retractall(Fact),
+                          arg(1, Fact, Value),
+                          assert(Fact)))),
+    flag(udp_rx_message_count, N, N+1),
+    fail.
+
+
+%! round_to_square_list(+Tuple, -List) is det.
+
+round_to_square_list((A,B), [A|T]) :-
+    !,
+    round_to_square_list(B, T).
+round_to_square_list(A, [A]).
+
+
+%!  send_udp_properties(+Port) is det.
+%
+%   Send properties to FlightGear
+
+send_udp_properties(Port) :-
+    polling_frequency(Polling_Frequency),
+    Polling_Delay is 1 / Polling_Frequency,
+    udp_socket(Socket),
+    repeat,
+    findall(Value, udp_output_value(Value), Values),
+    atomic_list_concat(Values, ',', Values_Atom),
+    format(string(UDP_String), '~w~n', [Values_Atom]),
+    udp_send(Socket, UDP_String, localhost:Port, []),
+    sleep(Polling_Delay),
+    fail.
+
+
+%!  udp_output_value(-Value) is nondet.
+
+udp_output_value(Value) :-
+    swi_fg_output(Property_Path, _, _),
+    functor(Fact, Property_Path, 1),
+    arg(1, Fact, Value),
+    call(Fact).
+
+
+%! initialise_output_property_facts is det.
+%
+%   Note that the _input_ property facts do not
+%   need to be initialised because we wait until
+%   that data has arrived from FlightGear before
+%   attempting to access those facts.
+
+initialise_output_property_facts :-
+    swi_fg_output(Property_Path, Type, _),
+    (   Type == float
+    ->  Value = 0.0
+    ;   Value = 0
+    ),
+    functor(Fact, Property_Path, 1),
+    retractall(Fact),
+    arg(1, Fact, Value),
+    assert(Fact),
+    fail.
+initialise_output_property_facts.
+
+
+%! udp_ports(-TX_Port, -RX_Port) is det.
+%
+%   Port directions are from the point of view of FlightGear
+
+udp_ports(5501, 5502).
+
+
+%!  http_port(-Port) is det.
+
+http_port(8080).
+
+
+%!  fg_root(-Dir) is det.
+%
+%  Location of FlightGear main data directory
+
+fg_root('/home/mike/.fgfs/fgdata_2024_1').
+
+
+%!  polling_frequency(-Frequency) is det.
+%
+%   @arg Frequency Polling frequency in Hz
+
+polling_frequency(5).
+
+
+%!  swi_fg_input(-Node_ID:atom, -Type, -Format:atom).
+
+swi_fg_input('/instrumentation/heading-indicator/indicated-heading-deg', int, '%d').
+swi_fg_input('/position/altitude-agl-ft', int, '%d').
+swi_fg_input('/instrumentation/airspeed-indicator/indicated-speed-kt', int, '%d').
+swi_fg_input('/instrumentation/attitude-indicator/indicated-pitch-deg', int, '%d').
+
+
+%!  swi_fg_output(-Node_ID:atom, -Type, -Format:atom).
+
+swi_fg_output('/controls/flight/rudder', float, '%f').
+swi_fg_output('/controls/flight/elevator-trim', float, '%f').
+
+
+%!  write_swi_fg_xml_file is det.
+%
+%   Write the XML file that specifies the data to be read and written by
+%   the FlightGear "generic" (UDP) interface
+
+write_swi_fg_xml_file :-
+    fg_root(FG_Root),
+    format(string(Dir), '~w/Protocol', [FG_Root]),
+    directory_file_path(Dir, 'swi_fg.xml', Path),
+    setup_call_cleanup(open(Path, write, Out),
+                       swi_fg_xml_write_1(Out),
+                       close(Out)).
+
+
+%!  swi_fg_xml_write_1(+Out:stream) is det.
+
+swi_fg_xml_write_1(Out) :-
+    findall(Chunk, chunk(input, Chunk), Output_Chunks),   % Inputs to FG are outputs from SWI
+    findall(Chunk, chunk(output, Chunk), Input_Chunks),
+    DOM = [element('PropertyList',
+                   [],
+                   [element(generic,
+                            [],
+                            [element(output,
+                                     [],
+                                     [element(line_separator,[],[newline]),
+                                      element(var_separator,[],[',']),
+                                      element(binary_mode,[], [false])|Output_Chunks]),
+                            element(input,
+                                     [],
+                                     [element(line_separator,[],[newline]),
+                                      element(var_separator,[],[',']),
+                                      element(binary_mode,[], [false])|Input_Chunks])])])],
+    xml_write(Out, DOM, []).
+
+
+%!  chunk(+Direction, -Chunk) is nondet.
+
+chunk(Direction, Chunk) :-
+    (   Direction == input
+    ->  swi_fg_input(Property_Path, Type, Format)
+
+    ;   Direction == output
+    ->  swi_fg_output(Property_Path, Type, Format)
+    ),
+    Chunk = element(chunk,
+                    [],
+                    [element(name, [], [Property_Path]),
+                     element(type, [], [Type]),
+                     element(format, [], [Format]),
+                     element(node, [], [Property_Path])]).
+
+
+
 %!  udp_get_prop(+Property_Path, -Value) is det.
+%
+%   Get the value of a property received from FlightGear
 
 udp_get_prop(Property_Path, Value) :-
-    with_mutex(swi_fg_input_properties, udp_input_properties(DICT)),
-    Value = DICT.Property_Path.
+    with_mutex(Property_Path,
+               udp_get_prop_1(Property_Path, Value)).
 
 
-%!  udp_set_prop(+Property_Path, +Value) is det.
+%!  udp_get_prop_1(+Property_Path, -Value) is det.
+
+udp_get_prop_1(Property_Path, Value) :-
+    functor(Fact, Property_Path, 1),
+    arg(1, Fact, V),
+    call(Fact),
+    !,
+    Value = V.
+
+
+%!  udp_set_prop(+Property_Path:atom, +Value) is det.
+%
+%   Set the value of property for transmission to FlightGear
 
 udp_set_prop(Property_Path, Value) :-
-    with_mutex(swi_fg_output_properties,
-               (   retract(udp_output_properties(DICT_IN)),
-                   get_dict(Property_Path, DICT_IN, _, DICT_OUT, Value),
-                   assert(udp_output_properties(DICT_OUT)))).
+    functor(Fact, Property_Path, 1),
+    with_mutex(Property_Path,
+               (  retractall(Fact),
+                  arg(1, Fact, Value),
+                  assert(Fact))).
 
 
 %!  http_get_prop(+Property_Path, -Value) is det.
