@@ -143,7 +143,7 @@ steer_heading_on_ground(Plotter) :-
                    required_heading,                                                          % Setpoint
                    udp_get_prop('/instrumentation/heading-indicator/indicated-heading-deg'),  % State_Value
                    udp_set_prop('/controls/flight/rudder'),                                   % Control
-                   direction_difference,                                                      % Error calculation
+                   angular_difference,                                                        % Error calculation
                    0.03,                                                                      % P
                    0.0,                                                                       % I
                    0.0,                                                                       % D
@@ -158,20 +158,31 @@ steer_heading_on_ground(Plotter) :-
 
 fly_heading(Plotter) :-
     pid_controller(\+ on_ground,                                                                % Guard
-                   required_heading,                                                            % Setpoint
-                   udp_get_prop('/instrumentation/heading-indicator/indicated-heading-deg'),    % State_Value
+                   required_roll,                                                               % Setpoint
+                   udp_get_prop('/instrumentation/attitude-indicator/indicated-roll-deg'),      % State_Value
                    udp_set_prop('/controls/flight/aileron'),                                    % Control
-                   direction_difference,                                                        % Error calculation
-                   0.03,                                                                        % P
-                   0.0,                                                                         % I
+                   angular_difference,                                                          % Error calculation
+                   0.02,                                                                        % P
+                   0.001,                                                                        % I
                    0.0,                                                                         % D
-                   -0.2,                                                                        % Control_Min
-                   +0.2,                                                                        % Control_Max
+                   -1.0,                                                                        % Control_Min
+                   +1.0,                                                                        % Control_Max
                    Plotter,
                    0.01,                                                                        % Plotting Y-scale factor
                    blue).
 
+%!  required_roll(-Required_Roll) is det.
 
+required_roll(Required_Roll) :-
+    udp_get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Indicated_Heading),
+    required_heading(Required_Heading),
+    angular_difference(Required_Heading, Indicated_Heading, Direction_Error),
+    (   Direction_Error =< -10
+    ->  Required_Roll = -10.0
+    ;   Direction_Error >= 10
+    ->  Required_Roll = +10.0
+    ;   Required_Roll = Direction_Error
+    ).
 
 
 %!  fly_pitch(+Required_Pitch_Deg) is det.
@@ -204,7 +215,7 @@ align_heading_indicator :-
     http_get_prop('/instrumentation/magnetic-compass/indicated-heading-deg', Magnetic_Compass_Indicated_Heading),
     http_get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Unaligned_Indicated_Heading),
     http_get_prop('/instrumentation/heading-indicator/align-deg', Initial_Align_Deg),
-    direction_difference(Magnetic_Compass_Indicated_Heading, Unaligned_Indicated_Heading, Heading_Indicator_Alignment_Error),
+    angular_difference(Magnetic_Compass_Indicated_Heading, Unaligned_Indicated_Heading, Heading_Indicator_Alignment_Error),
     Align_Deg is integer(Initial_Align_Deg + Heading_Indicator_Alignment_Error) mod 360,
     http_set_prop('/instrumentation/heading-indicator/align-deg', Align_Deg),
     http_get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Heading_Indicator_Heading),
@@ -234,7 +245,7 @@ align_heading_indicator :-
 %
 %   @arg Error_Pred name of goal to calculate the error from the
 %   Setpoint and the State_Value e.g. if Error_Pred was
-%   direction_difference, direction_difference(Setpoint, State_Value,
+%   angular_difference, angular_difference(Setpoint, State_Value,
 %   Error) would be called
 %
 %   @arg P float the proportional gain
@@ -294,13 +305,13 @@ sample_time(0.3).
 
 
 
-%!  direction_difference(+H1, +H2, -Diff) is det.
+%!  angular_difference(+H1, +H2, -Diff) is det.
 %
 %   Diff = H1 - H2
 %
 %   @arg Diff [-180, +180]
 
-direction_difference(H1, H2, Diff) :-
+angular_difference(H1, H2, Diff) :-
     Diff is integer((H1 - H2 + 540)) mod 360 - 180.
 
 
@@ -321,7 +332,8 @@ clamped(Expr, Left, Right, Clamped) :-
 swi_fg_input('/instrumentation/heading-indicator/indicated-heading-deg', int, '%d').
 swi_fg_input('/position/altitude-agl-ft', int, '%d').
 swi_fg_input('/instrumentation/airspeed-indicator/indicated-speed-kt', int, '%d').
-swi_fg_input('/instrumentation/attitude-indicator/indicated-pitch-deg', int, '%d').
+swi_fg_input('/instrumentation/attitude-indicator/indicated-pitch-deg', float, '%f').
+swi_fg_input('/instrumentation/attitude-indicator/indicated-roll-deg', float, '%f').
 
 
 %!  swi_fg_output(-Node_ID:atom, -Type, -Format:atom).
