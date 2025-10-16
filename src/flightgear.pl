@@ -97,31 +97,12 @@ user:test :-
     start_flightgear_udp_interface,  % Blocks until first tuple received from FlightGear
     cycle_rudder,   % Look at the GUI to confirm that the ruidder moves
     set_brakes(0.0),
-    steer_heading_on_ground(Plotter).
+    steer_heading_on_ground(Plotter),
+    fly_heading(Plotter).
 
 
-
-%    thread_create(fly_heading(340), _, [detached(true)]),
 %    thread_create(fly_pitch(4), _, [detached(true)]).
 
-
-
-%! steer_heading_on_ground(+Plotter) is det.
-
-steer_heading_on_ground(Plotter) :-
-    pid_controller(on_ground,                                                                 % Guard
-                   required_heading,                                                          % Setpoint
-                   udp_get_prop('/instrumentation/heading-indicator/indicated-heading-deg'),  % State_Value
-                   udp_set_prop('/controls/flight/rudder'),                                   % Control
-                   direction_difference,                                                      % Error calculation
-                   0.04,                                                                      % P
-                   0.0,                                                                      % I
-                   0.0,                                                                       % D
-                   -1.0,                                                                      % Control_Min
-                   +1.0,                                                                      % Control_Max
-                   Plotter,
-                   0.01,                                                                      % Plotting Y-scale factor
-                   green).
 
 %!  set_brakes(+Value) is det.
 
@@ -155,27 +136,41 @@ required_heading(Heading) :-
     Heading is 10 * Runway.
 
 
+%! steer_heading_on_ground(+Plotter) is det.
+
+steer_heading_on_ground(Plotter) :-
+    pid_controller(on_ground,                                                                 % Guard
+                   required_heading,                                                          % Setpoint
+                   udp_get_prop('/instrumentation/heading-indicator/indicated-heading-deg'),  % State_Value
+                   udp_set_prop('/controls/flight/rudder'),                                   % Control
+                   direction_difference,                                                      % Error calculation
+                   0.03,                                                                      % P
+                   0.0,                                                                       % I
+                   0.0,                                                                       % D
+                   -1.0,                                                                      % Control_Min
+                   +1.0,                                                                      % Control_Max
+                   Plotter,
+                   0.01,                                                                      % Plotting Y-scale factor
+                   green).
+
+
 %!  fly_heading is det.
 
 fly_heading(Plotter) :-
-    P = 0.01,
-    I = 0.0,
-    D = 0.0,
-    Control_Min = -0.5,
-    Control_Max = +0.5,
     pid_controller(\+ on_ground,                                                                % Guard
                    required_heading,                                                            % Setpoint
                    udp_get_prop('/instrumentation/heading-indicator/indicated-heading-deg'),    % State_Value
                    udp_set_prop('/controls/flight/aileron'),                                    % Control
                    direction_difference,                                                        % Error calculation
-                   P,
-                   I,
-                   D,
-                   Control_Min,
-                   Control_Max,
+                   0.03,                                                                        % P
+                   0.0,                                                                         % I
+                   0.0,                                                                         % D
+                   -0.2,                                                                        % Control_Min
+                   +0.2,                                                                        % Control_Max
                    Plotter,
-                   0.1,
-                   red).
+                   0.01,                                                                        % Plotting Y-scale factor
+                   blue).
+
 
 
 
@@ -321,18 +316,33 @@ clamped(Expr, Left, Right, Clamped) :-
     ).
 
 
+%!  swi_fg_input(-Node_ID:atom, -Type, -Format:atom).
+
+swi_fg_input('/instrumentation/heading-indicator/indicated-heading-deg', int, '%d').
+swi_fg_input('/position/altitude-agl-ft', int, '%d').
+swi_fg_input('/instrumentation/airspeed-indicator/indicated-speed-kt', int, '%d').
+swi_fg_input('/instrumentation/attitude-indicator/indicated-pitch-deg', int, '%d').
+
+
+%!  swi_fg_output(-Node_ID:atom, -Type, -Format:atom).
+
+swi_fg_output('/controls/flight/rudder', float, '%f').
+swi_fg_output('/controls/flight/aileron', float, '%f').
+swi_fg_output('/controls/flight/elevator-trim', float, '%f').
+
 %!  start_flightgea_udp__interface is det.
 
 start_flightgear_udp_interface :-
-    udp_ports(TX_Port, RX_Port),
     initialise_output_property_facts,
+    udp_ports(TX_Port, RX_Port),
     thread_create(send_udp_properties(RX_Port), _,  [detached(true)]),
     thread_create(listen_for_udp_properties(TX_Port), _, [detached(true)]),
     repeat,
     flag(udp_rx_message_count, N, N),
     (   N > 0    % Wait for first record from FlightGear
     ->  !
-    ;   sleep(0.2)
+    ;   sleep(0.2),
+        fail
     ).
 
 
@@ -441,20 +451,6 @@ fg_root('/home/mike/.fgfs/fgdata_2024_1').
 polling_frequency(5).
 
 
-%!  swi_fg_input(-Node_ID:atom, -Type, -Format:atom).
-
-swi_fg_input('/instrumentation/heading-indicator/indicated-heading-deg', int, '%d').
-swi_fg_input('/position/altitude-agl-ft', int, '%d').
-swi_fg_input('/instrumentation/airspeed-indicator/indicated-speed-kt', int, '%d').
-swi_fg_input('/instrumentation/attitude-indicator/indicated-pitch-deg', int, '%d').
-
-
-%!  swi_fg_output(-Node_ID:atom, -Type, -Format:atom).
-
-swi_fg_output('/controls/flight/rudder', float, '%f').
-swi_fg_output('/controls/flight/elevator-trim', float, '%f').
-
-
 %!  write_swi_fg_xml_file is det.
 %
 %   Write the XML file that specifies the data to be read and written by
@@ -523,9 +519,10 @@ udp_get_prop(Property_Path, Value) :-
 udp_get_prop_1(Property_Path, Value) :-
     functor(Fact, Property_Path, 1),
     arg(1, Fact, V),
-    call(Fact),
-    !,
-    Value = V.
+    (   Fact
+    ->  Value = V
+    ;   existence_error(Property_Path, udp_input_property)
+    ).
 
 
 %!  udp_set_prop(+Property_Path:atom, +Value) is det.
@@ -533,11 +530,20 @@ udp_get_prop_1(Property_Path, Value) :-
 %   Set the value of property for transmission to FlightGear
 
 udp_set_prop(Property_Path, Value) :-
-    functor(Fact, Property_Path, 1),
     with_mutex(Property_Path,
-               (  retractall(Fact),
-                  arg(1, Fact, Value),
-                  assert(Fact))).
+               udp_set_prop_1(Property_Path, Value)).
+
+
+%! udp_set_prop_1(+Property_Path, +Value) is det.
+
+udp_set_prop_1(Property_Path, Value) :-
+    functor(Fact, Property_Path, 1),
+    (   \+ retract(Fact)   % Use \+ so we don't bind the value
+    ->  existence_error(Property_Path, udp_output_property)
+    ;   true
+    ),
+    arg(1, Fact, Value),
+    assert(Fact).
 
 
 %!  http_get_prop(+Property_Path, -Value) is det.
