@@ -309,7 +309,6 @@ pid_controller(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred,
     call(State_Value_Pred, State_Value),
     sample_time(Sample_Time),
     graph(Plot_Name, Plot_Colour, Plot_Graph),
-    writeln(pg(Plot_Graph)),
     thread_create(pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Control_Min, Control_Max, Plot_Graph, Plot_Scale_Y, Sample_Time, 0, State_Value, 0),
                   _,
                   [detached(true)]).
@@ -348,7 +347,7 @@ pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pre
         Error = Previous_Error,
         Graph_Y = 0.0
     ),
-    in_pce_thread(send(Plot_Graph, append, Elapsed_Time, Graph_Y)),
+    send(Plot_Graph, append, Elapsed_Time, Graph_Y),
     Elapsed_Time_1 is Elapsed_Time + Sample_Time,
     sleep(Sample_Time),
     !,   % Precautionary green cut
