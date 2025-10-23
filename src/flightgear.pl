@@ -57,6 +57,7 @@ URL for testing http:
 :- use_module(library(http/http_client)).
 :- use_module(library(http/http_server)).
 
+:- debug(swifg).
 
 %!  airport_and_runway(-Airport, -Runway) is det.
 
@@ -85,10 +86,12 @@ user:test :-
                     Runway_Arg,
                    '--disable-ai-traffic'],
                    [stderr(pipe(Out))]),
+    debug(swifg, 'Waiting for FlightGear to start', []),
     repeat,
     read_line_to_string(Out, Line),
     sub_string(Line, _, _, _, "Primer reset to 0"),
     !,
+    debug(swifg, 'FlightGear to started', []),
     set_brakes(1.0),
     align_heading_indicator,
     set_qfe,
@@ -99,7 +102,7 @@ user:test :-
     set_brakes(0.0),
     steer_heading_on_ground,
     fly_heading,
-    climb(100, 5000).
+    climb(100, 3000).
 
 %!  set_brakes(+Value) is det.
 
@@ -156,34 +159,33 @@ steer_heading_on_ground :-
     pid_controller(on_ground,                                                                 % Guard
                    required_heading,                                                          % Setpoint
                    udp_get_prop('/instrumentation/heading-indicator/indicated-heading-deg'),  % State_Value
+                   most_recent_error,                                                         % Error conditioning
                    udp_set_prop('/controls/flight/rudder'),                                   % Control
-                   angular_difference,                                                        % Error calculation
                    0.03,                                                                      % P
                    0.0,                                                                       % I
                    0.0,                                                                       % D
                    -1.0,                                                                      % Control_Min
                    +1.0,                                                                      % Control_Max
                    'Ground Steering',                                                         % Plot_Name
-                   0.01,                                                                      % Plotting Y-scale factor
-                   green).                                                                    % Plot_Colour
+                   0.01).                                                                     % Plotting Y-scale factor
 
 
 %!  fly_heading is det.
 
 fly_heading :-
-    pid_controller(\+ on_ground,                                                                % Guard
-                   required_roll,                                                               % Setpoint
-                   udp_get_prop('/instrumentation/attitude-indicator/indicated-roll-deg'),      % State_Value
-                   udp_set_prop('/controls/flight/aileron'),                                    % Control
-                   angular_difference,                                                          % Error calculation
-                   0.01,                                                                        % P
-                   0.001,                                                                       % I
-                   0.0,                                                                         % D
-                   -1.0,                                                                        % Control_Min
-                   +1.0,                                                                        % Control_Max
-                   'Fly Heading',                                                               % Plot_Name
-                   0.01,                                                                        % Plotting Y-scale factor
-                   blue).                                                                       % Plot_Colour
+    pid_controller(\+ on_ground,                                                              % Guard
+                   required_roll,                                                             % Setpoint
+                   udp_get_prop('/instrumentation/attitude-indicator/indicated-roll-deg'),    % State_Value
+                   most_recent_error,                                                         % Error conditioning
+                   udp_set_prop('/controls/flight/aileron'),                                  % Control
+                   0.01,                                                                      % P
+                   0.001,                                                                     % I
+                   0.0,                                                                       % D
+                   -1.0,                                                                      % Control_Min
+                   +1.0,                                                                      % Control_Max
+                   'Fly Heading',                                                             % Plot_Name
+                   0.01).                                                                     % Plotting Y-scale factor
+
 
 
 %!  required_roll(-Required_Roll) is det.
@@ -204,49 +206,50 @@ required_roll(Required_Roll) :-
 %
 %   Adjust trim to fly at the specified Vertical_Rate_FPM until reaching Target_Altitude_FT
 %
+%   vertical_rate_error is positive if rate too high
 %   Positive elevator-trim puts nose down
 
 climb(Vertical_Rate_FPM, Target_Altitude_FT) :-
-    pid_controller(true,                                                                  % Guard
-                   required_vertical_rate(Vertical_Rate_FPM, Target_Altitude_FT),         % Setpoint
-                   udp_get_prop('/instrumentation/vertical-speed-indicator'),             % State_Value
-                   udp_set_prop('/controls/flight/elevator-trim'),                        % Control
-                   vertical_rate_error,                                                   % Error calculation
-                   0.0001,                                                                % P
-                   0.0,                                                                   % I
-                   0.0,                                                                   % D
-                   -1.0,                                                                  % Control_Min
-                   +1.0,                                                                  % Control_Max
-                   'Climb Rate',                                                          % Plot_Name
-                   0.001,                                                                 % Plotting Y-scale factor
-                   brown).                                                                % Plot_Colour
+    pid_controller(true,                                                                            % Guard
+                   required_vertical_rate(Vertical_Rate_FPM, Target_Altitude_FT),                   % Setpoint
+                   udp_get_prop('/instrumentation/vertical-speed-indicator/indicated-speed-fpm'),   % State_Value
+                   mean_of_last_n_seconds(5),                                                       % Error conditioning
+                   udp_set_prop('/controls/flight/elevator-trim'),                                  % Control
+                   0.0001,                                                                           % P
+                   0.0,                                                                             % I
+                   0.0,                                                                             % D
+                   -1.0,                                                                            % Control_Min
+                   +1.0,                                                                            % Control_Max
+                   'Climb',                                                                         % Plot_Name
+                   0.0005).                                                                         % Plotting Y-scale factor
 
 
-%! required_vertical_rate(+Target_Vertical_Rate_FPM, +Target_Altitude_FT, -Vertical_Rate_FPM) is det.
 
-required_vertical_rate(Target_Vertical_Rate_FPM, Target_Altitude_FT, Vertical_Rate_FPM) :-
-    % udp_get_prop('/instrumentation/vertical-speed-indicator', XXX), writeln(XXX),
+%! required_vertical_rate(+Target_Vertical_Rate_FPM,
+%!                        +Target_Altitude_FT,
+%!                        -Required_Vertical_Rate_FPM) is det.
+
+required_vertical_rate(Target_Vertical_Rate_FPM, Target_Altitude_FT, Required_Vertical_Rate_FPM) :-
     udp_get_prop('/instrumentation/airspeed-indicator/indicated-speed-kt', Indicated_Speed_KT),
     udp_get_prop('/instrumentation/altimeter/indicated_altitude-ft', Indicated_Altitude_FT),
     (   Target_Vertical_Rate_FPM > 0,
         Indicated_Altitude_FT >= Target_Altitude_FT
-    ->  Vertical_Rate_FPM = 0.0
+    ->  Required_Vertical_Rate_FPM = 0.0
 
     ;   Target_Vertical_Rate_FPM < 0,
         Indicated_Altitude_FT =< Target_Altitude_FT
-    ->  Vertical_Rate_FPM = 0.0
+    ->  Required_Vertical_Rate_FPM = 0.0
 
-    ;   Indicated_Speed_KT < 50
-    ->  Vertical_Rate_FPM = 0.0
+    ;   Indicated_Speed_KT < 55
+    ->  Required_Vertical_Rate_FPM = 0.0
 
-    ;   Indicated_Speed_KT < 60
-    ->  Vertical_Rate_FPM = 50.0
-
-    ;   Vertical_Rate_FPM = Target_Vertical_Rate_FPM
+    ;   Required_Vertical_Rate_FPM = Target_Vertical_Rate_FPM
     ).
 
 
 %!  vertical_rate_error(+Target_Vertical_Rate_FPM, +Actual_Vertical_Rate_FPM, -Vertical_Rate_Error_FPM) is det.
+%
+%   Error is positive if actual > target
 
 vertical_rate_error(Target_Vertical_Rate_FPM, Actual_Vertical_Rate_FPM, Vertical_Rate_Error_FPM) :-
     Vertical_Rate_Error_FPM is Actual_Vertical_Rate_FPM - Target_Vertical_Rate_FPM.
@@ -264,13 +267,13 @@ align_heading_indicator :-
     Align_Deg is integer(Initial_Align_Deg + Heading_Indicator_Alignment_Error) mod 360,
     http_set_prop('/instrumentation/heading-indicator/align-deg', Align_Deg),
     http_get_prop('/instrumentation/heading-indicator/indicated-heading-deg', Heading_Indicator_Heading),
-    format('Magnetic heading=~w, Heading Indicator heading=~w~n', [Magnetic_Compass_Indicated_Heading, Heading_Indicator_Heading]).
+    debug(swifg, 'Magnetic heading=~w, Heading Indicator heading=~w', [Magnetic_Compass_Indicated_Heading, Heading_Indicator_Heading]).
 
 
 %!  pid_controller(:Guard, :Setpoint_Pred, :State_Value_Pred,
-%!                 :Control_Pred, :Error_Pred, +P, +I, +D, +Control_Min,
-%!                 +Control_Max, +Plot_Name, +Plot_Scale_Y,
-%!                 +Plot_Colour) is det.
+%!                 :Conditioned_Error_Pred, :Control_Pred, +P, +I, +D,
+%!                 +Control_Min, +Control_Max, +Plot_Name,
+%!                 +Plot_Scale_Y) is det.
 %
 %   PID controller to reduce the mismatch between the input setpoint
 %   and the desired state value. This predicate runs forever on its own
@@ -284,15 +287,16 @@ align_heading_indicator :-
 %   @arg State_Value_Pred name of goal to get the current state value e.g if
 %   State_Value was roll_angle, roll_angle(X) will be called.
 %
+%   @arg Conditioned_Error_Pred name of goal to calculate the error from
+%   the Setpoint and the State_Value e.g. if Error_Pred was
+%   smoothed_error, smoothed_error(Error_History, Smoothed_Error)
+%   would be called
+%
 %   @arg Control_Pred name of goal to apply the output of the PID
 %   controller e.g. if Control_Output was set_aileron, set_aileron(X)
 %   will be called.
 %
-%   @arg Error_Pred name of goal to calculate the error from the
-%   Setpoint and the State_Value e.g. if Error_Pred was
-%   angular_difference, angular_difference(Setpoint, State_Value,
-%   Error) would be called
-%
+
 %   @arg P float the proportional gain
 %   @arg I float the integration gain
 %   @arg D float the derivative gain
@@ -300,66 +304,98 @@ align_heading_indicator :-
 %   @arg Control_Max float
 %   @arg Plot_Name for plot window title
 %   @arg Plot_Scale_Y factor to scale the error for plotting
-%   @arg Plot_Colour colour of the plot line
 
 :- meta_predicate
-    pid_controller(0, 1, 1, 1, 3, +, +, +, +, +, +, +, +).
+    pid_controller(0, 1, 1, 2, 1, +, +, +, +, +, +, +).
 
-pid_controller(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Control_Min, Control_Max, Plot_Name, Plot_Scale_Y, Plot_Colour) :-
-    call(State_Value_Pred, State_Value),
+pid_controller(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Plot_Name, Plot_Scale_Y) :-
     sample_time(Sample_Time),
-    graph(Plot_Name, Plot_Colour, Plot_Graph),
-    thread_create(pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Control_Min, Control_Max, Plot_Graph, Plot_Scale_Y, Sample_Time, 0, State_Value, 0),
+    graph(Plot_Name, Error_Plot, Control_Plot),
+    thread_create(pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Plot_Scale_Y, Sample_Time, [], 0),
                   _,
                   [detached(true)]).
 
-%!  graph(+Plot_Name, +Plot_Colour, -Plot_Graph) is det.
+%!  graph(+Plot_Name, -Error_Plot, -Control_Plot) is det.
 
-graph(Plot_Name, Plot_Colour, Plot_Graph) :-
+graph(Plot_Name, Error_Plot, Control_Plot) :-
     new(W, auto_sized_picture(Plot_Name)),
     send(W, max_size, size(2000, 600)),
     send(W, display, new(Plotter, plotter)),
     send(Plotter, axis, plot_axis(x, 0, 200, @(default), 1500)),
     send(Plotter, axis, plot_axis(y, -1, 1, @(default), 400)),
-    send(Plotter, graph, new(Plot_Graph, plot_graph)),
-    send(Plot_Graph, colour, Plot_Colour),
+    send(Plotter, graph, new(Error_Plot, plot_graph)),
+    send(Error_Plot, colour, red),
+    send(Plotter, graph, new(Control_Plot, plot_graph)),
+    send(Control_Plot, colour, blue),
     send(W, open).
 
+
 %! pid_controller_1(:Setpoint_Pred, :State_Value_Pred, :Control_Pred,
-%!                  :Error_Pred, +P, +I, +D, +Control_Min, +Control_Max,
-%!                  +Plot_Graph, +Plot_Scale_Y,
-%!                  +Sample_Time, +Error_Sum,
-%!                  +Previous_Error, +Elapsed_Time) is det.
-
+%!                  :Conditioned_Error_Pred, +P, +I, +D, +Control_Min,
+%!                  +Control_Max, +Plot_Graph, +Plot_Scale_Y,
+%!                  +Sample_Time, +Error_History, +Elapsed_Time) is det.
+%
+%   @arg Error_History list of error values, most recent first. Maximum
+%   length set by error_history_window_size/1
+%
 :- meta_predicate
-    pid_controller_1(0, 1, 1, 1, 3, +, +, +, +, +, +, +, +, +, +, +).
+    pid_controller_1(0, 1, 1, 2, 1, +, +, +, +, +, +, +, +, +, +, +).
 
-pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Control_Min, Control_Max, Plot_Graph, Plot_Scale_Y, Sample_Time, Error_Sum, Previous_Error, Elapsed_Time) :-
+pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Plot_Scale_Y, Sample_Time, Error_History_0, Elapsed_Time) :-
     (   Guard
     ->  call(Setpoint_Pred, Setpoint),
         call(State_Value_Pred, State_Value),
-        call(Error_Pred, Setpoint, State_Value, Error),
-        Graph_Y is Error * Plot_Scale_Y,
-        Error_Sum_1 is Error_Sum + Error,
-        clamped(P * Error + I * Error_Sum * Sample_Time + D * (Error - Previous_Error) / Sample_Time, Control_Min, Control_Max, Control),
-        call(Control_Pred, Control)
-    ;   Error_Sum_1 = Error_Sum,
-        Error = Previous_Error,
-        Graph_Y = 0.0
+        difference(Setpoint, State_Value, Error),
+        error_history(Error, Error_History_0, Error_History),
+        call(Conditioned_Error_Pred, Error_History, PID_Input_Error),
+        sum_list(Error_History, Integral),
+        Error_Plot_Y is PID_Input_Error * Plot_Scale_Y,
+        derivative(Error_History, Derivative),
+        clamped(P * PID_Input_Error + I * Integral * Sample_Time + D * Derivative, Control_Min, Control_Max, Control),
+        call(Control_Pred, Control),
+        send(Error_Plot, append, Elapsed_Time, Error_Plot_Y),
+        send(Control_Plot, append, Elapsed_Time, Control)
+    ;   Error_History = Error_History_0
     ),
-    send(Plot_Graph, append, Elapsed_Time, Graph_Y),
     Elapsed_Time_1 is Elapsed_Time + Sample_Time,
     sleep(Sample_Time),
     !,   % Precautionary green cut
-    pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Control_Pred, Error_Pred, P, I, D, Control_Min, Control_Max, Plot_Graph, Plot_Scale_Y, Sample_Time, Error_Sum_1, Error, Elapsed_Time_1).
+    pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Plot_Scale_Y, Sample_Time, Error_History, Elapsed_Time_1).
 
 
 %!  sample_time(-Sample_Time) is det.
 %
 %   @arg Sample_Time float sample time in seconds
 
-sample_time(0.3).
+sample_time(0.2).
 
+
+%!  error_history(+State_Value, +Error_History, -New_Error_History) is det.
+
+error_history(V, [], L) :-
+    !,
+    error_history_window_size(N),
+    initial_error_history(N, V, L).
+
+error_history(V, L0, L) :-
+    append(Front, [_], L0),
+    !,
+    L = [V|Front].
+
+
+%!  difference(+A, +B, -C) is det.
+%
+%   C = A - B
+%
+%   @arg A number ; degrees/1
+%   @arg B number ; degrees/1
+%   @arg C number
+
+difference(degrees(A), degrees(B), C) :-
+    !,
+    angular_difference(A, B, C).
+difference(A, B, C) :-
+    C is A - B.
 
 
 %!  angular_difference(+H1, +H2, -Diff) is det.
@@ -370,6 +406,50 @@ sample_time(0.3).
 
 angular_difference(H1, H2, Diff) :-
     Diff is integer((H1 - H2 + 540)) mod 360 - 180.
+
+
+%! initial_error_history(+Length:integer, +State_Value, -Error_History:list) is det.
+
+initial_error_history(0, _, []) :-
+    !.
+initial_error_history(N, V, [V|T]) :-
+    NN is N-1,
+    initial_error_history(NN, V, T).
+
+
+%!  error_history_window_size(-Size)
+%
+%   Size is the number of error values to keep.
+%
+%   @arg Size integer
+
+error_history_window_size(50).
+
+
+%!   mean_of_last_n_seconds(N:integer, +Values, -Mean) is det.
+%
+%   @arg Values list error_history_window_size/1 long, sample_time/1
+%   apart
+
+mean_of_last_n_seconds(N, Values, Mean) :-
+    sample_time(S),
+    Samples_Count is integer(N / S),
+    length(L, Samples_Count),
+    append(L, _, Values),
+    sum_list(L, Sum),
+    Mean is Sum / Samples_Count.
+
+
+%!   derivative(+Error_History, -Derivative) is det.
+%
+%   @tbd
+
+derivative(_, 0).
+
+
+%!  most_recent_error(+Error_History, -Error) is dewt.
+
+most_recent_error([V|_], V).
 
 
 %!   clamped(+Expr, +Left, +Right, -Clamped) is det.
@@ -391,7 +471,7 @@ swi_fg_input('/instrumentation/altimeter/indicated_altitude-ft', float, '%f').
 swi_fg_input('/instrumentation/attitude-indicator/indicated-pitch-deg', float, '%f').
 swi_fg_input('/instrumentation/attitude-indicator/indicated-roll-deg', float, '%f').
 swi_fg_input('/instrumentation/heading-indicator/indicated-heading-deg', float, '%f').
-swi_fg_input('/instrumentation/vertical-speed-indicator', float, '%f').
+swi_fg_input('/instrumentation/vertical-speed-indicator/indicated-speed-fpm', float, '%f').
 swi_fg_input('/position/altitude-agl-ft', float, '%f').
 
 
@@ -635,4 +715,6 @@ http_set_prop(Property_Path, Value) :-
     URL = [protocol(http), host(localhost), port(Port), path(Path)],
     http_get(URL, json(JSON), []),
     memberchk(type=Type, JSON),
-    http_post(URL, json(#{path:Property_Path, type:Type, value:Value}), _, []).
+    http_post(URL, json(#{path:Property_Path, type:Type, value:Value}), _, []),
+    debug(swifg, '~q', [http_set_prop(Property_Path, Value)]).
+
