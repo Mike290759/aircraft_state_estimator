@@ -91,7 +91,7 @@ user:test :-
     read_line_to_string(Out, Line),
     sub_string(Line, _, _, _, "Primer reset to 0"),
     !,
-    debug(swifg, 'FlightGear to started', []),
+    debug(swifg, 'FlightGear started', []),
     set_brakes(1.0),
     align_heading_indicator,
     set_qfe,
@@ -205,17 +205,14 @@ required_roll(Required_Roll) :-
 %!  climb(+Vertical_Rate_FPM, +Target_Altitude_FT) is det.
 %
 %   Adjust trim to fly at the specified Vertical_Rate_FPM until reaching Target_Altitude_FT
-%
-%   vertical_rate_error is positive if rate too high
-%   Positive elevator-trim puts nose down
 
 climb(Vertical_Rate_FPM, Target_Altitude_FT) :-
     pid_controller(true,                                                                            % Guard
                    required_vertical_rate(Vertical_Rate_FPM, Target_Altitude_FT),                   % Setpoint
                    udp_get_prop('/instrumentation/vertical-speed-indicator/indicated-speed-fpm'),   % State_Value
-                   mean_of_last_n_seconds(5),                                                       % Error conditioning
+                   mean_of_last_n_seconds(1),                                                       % Error conditioning
                    udp_set_prop('/controls/flight/elevator-trim'),                                  % Control
-                   0.0001,                                                                           % P
+                   -0.0001,                                                                         % P
                    0.0,                                                                             % I
                    0.0,                                                                             % D
                    -1.0,                                                                            % Control_Min
@@ -353,8 +350,8 @@ pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred,
         derivative(Error_History, Derivative),
         clamped(P * PID_Input_Error + I * Integral * Sample_Time + D * Derivative, Control_Min, Control_Max, Control),
         call(Control_Pred, Control),
-        send(Error_Plot, append, Elapsed_Time, Error_Plot_Y),
-        send(Control_Plot, append, Elapsed_Time, Control)
+        in_pce_thread(send(Error_Plot, append, Elapsed_Time, Error_Plot_Y)),
+        in_pce_thread(send(Control_Plot, append, Elapsed_Time, Control))
     ;   Error_History = Error_History_0
     ),
     Elapsed_Time_1 is Elapsed_Time + Sample_Time,
