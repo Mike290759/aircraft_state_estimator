@@ -59,9 +59,9 @@ URL for testing http:
 
 :- debug(swifg).
 
-%!  airport_and_runway(-Airport, -Runway) is det.
+%!  airport_and_runway(-Airport, -Runway, -Heading) is det.
 
-airport_and_runway('NZWN', 34).
+airport_and_runway('NZWN', 34, 338).
 
 
 %!  test is det.
@@ -76,7 +76,7 @@ user:test :-
     format(string(Generic_TX_Arg), '--generic=socket,out,~w,localhost,~w,udp,swi_fg', [Polling_Frequency, TX_Port]),
     format(string(Generic_RX_Arg), '--generic=socket,in,~w,localhost,~w,udp,swi_fg', [Polling_Frequency, RX_Port]),
     format(string(HTTP_Arg), '--httpd=~w', [HTTP_Port]),
-    airport_and_runway(Airport, Runway),
+    airport_and_runway(Airport, Runway, _),
     format(string(Airport_Arg), '--airport=~w', [Airport]),
     format(string(Runway_Arg), '--runway=~w', [Runway]),
     process_create('/home/mike/Applications/flightgear-2024.1.2-linux-amd64.AppImage',
@@ -94,6 +94,7 @@ user:test :-
     debug(swifg, 'FlightGear started', []),
     set_brakes(1.0),
     align_heading_indicator,
+    http_get_prop('/instrumentation/attitude-indicator/indicated-pitch-deg', Indicated_Pitch_Deg_On_Ground),
     set_qfe,
     start_flightgear_udp_interface,  % Blocks until first tuple received from FlightGear
     cycle_rudder,                    % Look at the GUI to confirm that the ruidder moves
@@ -102,7 +103,7 @@ user:test :-
     set_brakes(0.0),
     steer_heading_on_ground,
     fly_heading,
-    climb(100, 3000).
+    climb(100, 3000, Indicated_Pitch_Deg_On_Ground).
 
 %!  set_brakes(+Value) is det.
 
@@ -142,15 +143,8 @@ on_ground :-
 %!  required_heading(-Heading) is det.
 
 required_heading(Heading) :-
-   flag(htest, H, H),
-   (   H == 0
-   ->  fail
-   ;   Heading = H
-   ).
+    airport_and_runway(_, _, Heading).
 
-required_heading(Heading) :-
-    airport_and_runway(_, Runway),
-    Heading is 10 * Runway.
 
 
 %! steer_heading_on_ground is det.
@@ -167,7 +161,7 @@ steer_heading_on_ground :-
                    -1.0,                                                                      % Control_Min
                    +1.0,                                                                      % Control_Max
                    'Ground Steering',                                                         % Plot_Name
-                   0.01).                                                                     % Plotting Y-scale factor
+                   200).                                                                      % Y_Scale_Max
 
 
 %!  fly_heading is det.
@@ -184,7 +178,7 @@ fly_heading :-
                    -1.0,                                                                      % Control_Min
                    +1.0,                                                                      % Control_Max
                    'Fly Heading',                                                             % Plot_Name
-                   0.01).                                                                     % Plotting Y-scale factor
+                   200).                                                                      % Y_Scale_Max
 
 
 
@@ -202,23 +196,26 @@ required_roll(Required_Roll) :-
     ).
 
 
-%!  climb(+Vertical_Rate_FPM, +Target_Altitude_FT) is det.
+%!  climb(+Vertical_Rate_FPM, +Target_Altitude_FT, +Indicated_Pitch_Deg_On_Ground) is det.
 %
 %   Adjust trim to fly at the specified Vertical_Rate_FPM until reaching Target_Altitude_FT
+%
+%   P = -0.0001, I = 0,D = 0 stable but did not completely null the error
+%   P = 0, I = -0.000001, D = 0 damped oscillation until error nulled at 300 seconds
 
-climb(Vertical_Rate_FPM, Target_Altitude_FT) :-
+climb(Vertical_Rate_FPM, Target_Altitude_FT, Indicated_Pitch_Deg_On_Ground) :-
     pid_controller(true,                                                                            % Guard
                    required_vertical_rate(Vertical_Rate_FPM, Target_Altitude_FT),                   % Setpoint
-                   udp_get_prop('/instrumentation/vertical-speed-indicator/indicated-speed-fpm'),   % State_Value
-                   mean_of_last_n_seconds(1),                                                       % Error conditioning
+                   vertical_rate_estimate(Indicated_Pitch_Deg_On_Ground),                           % State_Value
+                   mean_of_last_n_seconds(0.5),                                                     % Error conditioning
                    udp_set_prop('/controls/flight/elevator-trim'),                                  % Control
                    -0.0001,                                                                         % P
-                   0.0,                                                                             % I
+                   -0.00005,                                                                        % I
                    0.0,                                                                             % D
                    -1.0,                                                                            % Control_Min
                    +1.0,                                                                            % Control_Max
                    'Climb',                                                                         % Plot_Name
-                   0.0005).                                                                         % Plotting Y-scale factor
+                   2000).                                                                           % Y_Scale_Max
 
 
 
@@ -244,12 +241,27 @@ required_vertical_rate(Target_Vertical_Rate_FPM, Target_Altitude_FT, Required_Ve
     ).
 
 
-%!  vertical_rate_error(+Target_Vertical_Rate_FPM, +Actual_Vertical_Rate_FPM, -Vertical_Rate_Error_FPM) is det.
+%!  vertical_rate_estimate(Indicated_Pitch_Deg_On_Ground, -Vertical_Rate_FPM) is det.
 %
-%   Error is positive if actual > target
+%   Rate_of_Climb = Airspeed x sin(Gamma)
+%   where
+%   Gamma = Attitude - Angle_of_Incidence
+%
+%   For C172 Angle_of_Incidence = 1.5 degrees
+%
+%   udp_get_prop('/instrumentation/vertical-speed-indicator/indicated-speed-fpm')
 
-vertical_rate_error(Target_Vertical_Rate_FPM, Actual_Vertical_Rate_FPM, Vertical_Rate_Error_FPM) :-
-    Vertical_Rate_Error_FPM is Actual_Vertical_Rate_FPM - Target_Vertical_Rate_FPM.
+:- debug(swifg(climb)).
+
+vertical_rate_estimate(Indicated_Pitch_Deg_On_Ground, Vertical_Rate_FPM) :-
+    udp_get_prop('/instrumentation/airspeed-indicator/indicated-speed-kt', Indicated_Speed_KT),
+    udp_get_prop('/instrumentation/attitude-indicator/indicated-pitch-deg', Indicated_Pitch_Deg),
+    Gamma is Indicated_Pitch_Deg - Indicated_Pitch_Deg_On_Ground + 1.5,   % 1.5 is wing angle of incidence
+    (   Indicated_Speed_KT > 45
+    ->  Vertical_Rate_FPM is 101.3 * Indicated_Speed_KT * sin(pi * Gamma / 180.0)
+    ;   Vertical_Rate_FPM = 0
+    ),
+    debug(swifg(climb), 'Indicated_Pitch_Deg=~2f, Gamma=~2f, Indicated_Speed_KT=~0f, Vertical_Rate_FPM=~0f', [Indicated_Pitch_Deg, Gamma, Indicated_Speed_KT, Vertical_Rate_FPM]).
 
 
 %!  align_heading_indicator is det.
@@ -267,10 +279,11 @@ align_heading_indicator :-
     debug(swifg, 'Magnetic heading=~w, Heading Indicator heading=~w', [Magnetic_Compass_Indicated_Heading, Heading_Indicator_Heading]).
 
 
+
 %!  pid_controller(:Guard, :Setpoint_Pred, :State_Value_Pred,
 %!                 :Conditioned_Error_Pred, :Control_Pred, +P, +I, +D,
 %!                 +Control_Min, +Control_Max, +Plot_Name,
-%!                 +Plot_Scale_Y) is det.
+%!                 +Y_Scale_Max) is det.
 %
 %   PID controller to reduce the mismatch between the input setpoint
 %   and the desired state value. This predicate runs forever on its own
@@ -300,26 +313,27 @@ align_heading_indicator :-
 %   @arg Control_Min float
 %   @arg Control_Max float
 %   @arg Plot_Name for plot window title
-%   @arg Plot_Scale_Y factor to scale the error for plotting
+%   @arg Y_Scale_Max maximum Y value (+ and -)
 
 :- meta_predicate
     pid_controller(0, 1, 1, 2, 1, +, +, +, +, +, +, +).
 
-pid_controller(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Plot_Name, Plot_Scale_Y) :-
+pid_controller(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Plot_Name, Y_Scale_Max) :-
     sample_time(Sample_Time),
-    graph(Plot_Name, Error_Plot, Control_Plot),
-    thread_create(pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Plot_Scale_Y, Sample_Time, [], 0),
+    graph(Plot_Name, Y_Scale_Max, Error_Plot, Control_Plot),
+    thread_create(pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Y_Scale_Max, Sample_Time, [], 0),
                   _,
                   [detached(true)]).
 
-%!  graph(+Plot_Name, -Error_Plot, -Control_Plot) is det.
 
-graph(Plot_Name, Error_Plot, Control_Plot) :-
+%!  graph(+Plot_Name, +Y_Scale_Max, -Error_Plot, -Control_Plot) is det.
+
+graph(Plot_Name, Y_Scale_Max, Error_Plot, Control_Plot) :-
     new(W, auto_sized_picture(Plot_Name)),
     send(W, max_size, size(2000, 600)),
     send(W, display, new(Plotter, plotter)),
     send(Plotter, axis, plot_axis(x, 0, 200, @(default), 1500)),
-    send(Plotter, axis, plot_axis(y, -1, 1, @(default), 400)),
+    send(Plotter, axis, plot_axis(y, -Y_Scale_Max, Y_Scale_Max, @(default), 400)),
     send(Plotter, graph, new(Error_Plot, plot_graph)),
     send(Error_Plot, colour, red),
     send(Plotter, graph, new(Control_Plot, plot_graph)),
@@ -329,7 +343,7 @@ graph(Plot_Name, Error_Plot, Control_Plot) :-
 
 %! pid_controller_1(:Setpoint_Pred, :State_Value_Pred, :Control_Pred,
 %!                  :Conditioned_Error_Pred, +P, +I, +D, +Control_Min,
-%!                  +Control_Max, +Plot_Graph, +Plot_Scale_Y,
+%!                  +Control_Max, +Plot_Graph, +Y_Scale_Max,
 %!                  +Sample_Time, +Error_History, +Elapsed_Time) is det.
 %
 %   @arg Error_History list of error values, most recent first. Maximum
@@ -338,7 +352,7 @@ graph(Plot_Name, Error_Plot, Control_Plot) :-
 :- meta_predicate
     pid_controller_1(0, 1, 1, 2, 1, +, +, +, +, +, +, +, +, +, +, +).
 
-pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Plot_Scale_Y, Sample_Time, Error_History_0, Elapsed_Time) :-
+pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Y_Scale_Max, Sample_Time, Error_History_0, Elapsed_Time) :-
     (   Guard
     ->  call(Setpoint_Pred, Setpoint),
         call(State_Value_Pred, State_Value),
@@ -346,18 +360,18 @@ pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred,
         error_history(Error, Error_History_0, Error_History),
         call(Conditioned_Error_Pred, Error_History, PID_Input_Error),
         sum_list(Error_History, Integral),
-        Error_Plot_Y is PID_Input_Error * Plot_Scale_Y,
         derivative(Error_History, Derivative),
         clamped(P * PID_Input_Error + I * Integral * Sample_Time + D * Derivative, Control_Min, Control_Max, Control),
         call(Control_Pred, Control),
-        in_pce_thread(send(Error_Plot, append, Elapsed_Time, Error_Plot_Y)),
-        in_pce_thread(send(Control_Plot, append, Elapsed_Time, Control))
+        in_pce_thread(send(Error_Plot, append, Elapsed_Time, PID_Input_Error)),
+        Control_Plot_Y is Control * Y_Scale_Max,
+        in_pce_thread(send(Control_Plot, append, Elapsed_Time, Control_Plot_Y))
     ;   Error_History = Error_History_0
     ),
     Elapsed_Time_1 is Elapsed_Time + Sample_Time,
     sleep(Sample_Time),
     !,   % Precautionary green cut
-    pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Plot_Scale_Y, Sample_Time, Error_History, Elapsed_Time_1).
+    pid_controller_1(Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Y_Scale_Max, Sample_Time, Error_History, Elapsed_Time_1).
 
 
 %!  sample_time(-Sample_Time) is det.
