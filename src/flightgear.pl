@@ -66,7 +66,7 @@ URL for testing http:
     pid_controller(+, 0, 1, 1, 2, 1, +, +, +, +, +, +).
 
 :- meta_predicate
-    pid_controller_1(+, 0, 1, 1, 2, 1, +, +, +, +, +, +, +, +, +, +, +, +, +).
+    pid_controller_1(+, 0, 1, 1, 2, 1, +, +, +, +, +, +, +, +, +, +, +, +).
 
 %!  airport_and_runway(-Airport, -Runway, -Heading) is det.
 

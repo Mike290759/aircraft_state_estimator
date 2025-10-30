@@ -43,7 +43,8 @@ depends on the location of the system's poles within the unit circle in the z-pl
 See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 */
 
-%!  sodt(+X:stream, +Y:stream, +A1, +A2, +B0, +B1, +B2) is det.
+%!  sodt(+In:stream, +Out:stream, +A1, +A2, +B0, +B1, +B2) is
+%!       det.
 %
 %   Second-order discrete-time linear system
 %   Difference Equation: A second-order discrete-time linear system can be represented by the
@@ -53,44 +54,49 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 %
 %   H(Z) = B0 + B1 * Z ^ -1 + B2 * Z ^ -2 / 1 + A1 * Z ^ -1 + A2 * Z ^ -2
 
-sodt(X, Y, A1, A2, B0, B1, B2) :-
-   read(X, X2),
+sodt(In, Out, A1, A2, B0, B1, B2) :-
+   read(In, X2),
    X2 \== end_of_file,
-   read(X, X1),
+   read(In, X1),
    X1 \== end_of_file,
-   sodt_1(X, Y, A1, A2, B0, B1, B2, X2, X1, 0, 0).
+   sodt_1(In, Out, 2, A1, A2, B0, B1, B2, X2, X1, 0, 0).
 
-sodt_1(X, Y, A1, A2, B0, B1, B2, X2, X1, Y2, Y1) :-
-    read(X, X0),
+sodt_1(In, Out, T, A1, A2, B0, B1, B2, X2, X1, Y2, Y1) :-
+    read(In, X0),
     X0 \== end_of_file,
     !,
     Y0 is B0 * X0 + B1 * X1 + B2 * X2 - A1 * Y1 + A2 * Y2,
-    format(Y, '~q.~n', [Y0]),
-    sodt_1(X, Y, A1, A2, B0, B1, B2, X1, X0, Y1, Y0).
-sodt_1(_, _, _, _, _, _, _, _, _, _, _).
+    format(Out, '~q.~n', [p(T,Y0)]),
+    TT is T + 1,
+    sodt_1(In, Out, TT, A1, A2, B0, B1, B2, X1, X0, Y1, Y0).
+sodt_1(_, _, _, _, _, _, _, _, _, _, _, _).
 
 user:ts :-
-    setup_call_cleanup(open('step.dat', read, X),
-                       setup_call_cleanup(open('step_response.dat', write, Y),
-                                          sodt(X, Y, 1, 0.5, 0.4, 0.5, 0.6),
-                                          close(Y)),
-                       close(X)),
+    setup_call_cleanup(open('step.dat', read, In),
+                       setup_call_cleanup(open('step_response.dat', write, Out),
+                                          sodt(In, Out, 1, 0.5, 1.1, 1.2, 1.0),
+                                          close(Out)),
+                       close(In)),
     new(W, auto_sized_picture(sodt)),
     send(W, max_size, size(2000, 600)),
     send(W, display, new(Plotter, plotter)),
-    send(Plotter, axis, plot_axis(x, 0, 200, @(default), 1500)),
-    send(Plotter, axis, plot_axis(y, -1.0, 1.0, @(default), 400)),
+    send(Plotter, axis, plot_axis(x, 0, 1000, @(default), 1500)),
+    send(Plotter, axis, plot_axis(y, -1000.0, 1000.0, @(default), 400)),
     send(Plotter, graph, new(Plot, plot_graph)),
     send(Plot, colour, green),
     send(W, open),
-    setup_call_cleanup(open('step_response.dat', read, R),
-                       (   between(1, infinite, T),
-                           read(R, Y),
-                           (   Y == end_of_file
+    setup_call_cleanup(open('step_response.dat', read, In_1),
+                       (   repeat,
+                           read(In_1, Term),
+                           (   Term == end_of_file
                            ->  !
-                           ;   send(Plot, append, T, Y)
+                           ;   Term = p(T,Y),
+                               -1000 =< Y, Y =< 1000,
+                               writeln([T, Y]),
+                               send(Plot, append, T, Y),
+                               fail
                            )),
-                       close(R)).
+                       close(In_1)).
 
 
 user:cs :-
