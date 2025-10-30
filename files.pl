@@ -6,3 +6,4 @@
 user:file_search_path(src, './src').
 
 :- use_module(src(flightgear)).
+:- use_module(src(spi)).

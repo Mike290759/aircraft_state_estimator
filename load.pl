@@ -4,4 +4,5 @@
     edit('README.md'),
     edit('files.pl'),
     edit('load.pl'),
-    edit(src(flightgear)).
+    edit(src(flightgear)),
+    edit(src(spi)).
