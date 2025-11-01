@@ -361,12 +361,18 @@ graph(PID_Id, Y_Scale_Max, Error_Plot, Control_Plot, Step_Response_Plot) :-
     user:capture_step_response/2.
 
 pid_controller_1(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History_0, Elapsed_Time) :-
+    setup_call_cleanup(open('step_response.dat', write, Step_Response_Stream),
+                       pid_controller_2(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History_0, Elapsed_Time, Step_Response_Stream),
+                       close(Step_Response_Stream)).
+
+pid_controller_2(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History_0, Elapsed_Time, Step_Response_Stream) :-
     Guard,
     !,
     (   user:capture_step_response(PID_Id, Elapsed_Time, Control)
     ->  call(Control_Pred, Control),
         call(State_Value_Pred, State_Value),
-        in_pce_thread(send(Step_Response_Plot, append, Elapsed_Time, State_Value))
+        in_pce_thread(send(Step_Response_Plot, append, Elapsed_Time, State_Value)),
+        format(Step_Response_Stream, '~q.~n', [p(Elapsed_Time, State_Value)])
 
     ;   call(Setpoint_Pred, Setpoint),
         call(State_Value_Pred, State_Value),
@@ -383,12 +389,12 @@ pid_controller_1(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Err
     in_pce_thread(send(Control_Plot, append, Elapsed_Time, Control_Plot_Y)),
     Elapsed_Time_1 is Elapsed_Time + Sample_Time,
     sleep(Sample_Time),
-    pid_controller_1(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History, Elapsed_Time_1).
+    pid_controller_2(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History, Elapsed_Time_1, Step_Response_Stream).
 
-pid_controller_1(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History, Elapsed_Time) :-
+pid_controller_2(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History, Elapsed_Time, Step_Response_Stream) :-
     Elapsed_Time_1 is Elapsed_Time + Sample_Time,
     sleep(Sample_Time),
-    pid_controller_1(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History, Elapsed_Time_1).
+    pid_controller_2(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History, Elapsed_Time_1, Step_Response_Stream).
 
 
 %!  sample_time(-Sample_Time) is det.

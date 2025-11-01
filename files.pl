@@ -4,6 +4,7 @@
 :- dynamic user:file_search_path/2.
 
 user:file_search_path(src, './src').
+user:file_search_path(dat, '.').
 
 :- use_module(src(flightgear)).
 :- use_module(src(spi)).
