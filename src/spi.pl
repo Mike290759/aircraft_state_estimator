@@ -30,6 +30,10 @@ SOFTWARE.
           [
           ]).
 
+:- use_module(library(lists), [min_member/2, max_member/2, member/2]).
+:- use_module(library(pce), [new/2, send/2]).
+:- use_module(library(debug), [assertion/1]).
+
 /** <module> System Parameter Identification
 
 A second-order discrete-time linear system is a mathematical model that describes
@@ -44,7 +48,7 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 */
 
 :- meta_predicate
-   sodt(2, +, +, +, +, +, +, -),
+   sodt(2, +, +, +, +, +, +, +, +, -),
    sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, -).
 
 
@@ -53,22 +57,34 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 user:ts :-
    Duration = 1.0,
    Sampling_Frequency = 1000,
-   sodt(step(0.0, 0.05), Duration, Sampling_Frequency, 0.1239, 0.99, -1.143, 0.412, Points),
+   b_a(B0, B1, B2, A0, A1, A2),
+%   Input_Fn = step(0.0, 0.05),
+   Input_Fn = sin(20),
+   sodt(Input_Fn, Duration, Sampling_Frequency, B0, B1, B2, A0, A1, A2, Points),
    y_values(Points, Y_Values),
    min_member(Min, Y_Values),
    max_member(Max, Y_Values),
-   new(W, auto_sized_picture(sodt)),
+   format(string(Title), 'sodt - ~w', [b_a(B0, B1, B2, A0, A1, A2)]),
+   new(W, auto_sized_picture(Title)),
    send(W, max_size, size(2000, 600)),
    send(W, display, new(Plotter, plotter)),
-   send(Plotter, axis, plot_axis(x, 0.0, Duration, @(default), 1500)),
+   Display_Duration is Duration / 10.0,
+   send(Plotter, axis, plot_axis(x, 0.0, Display_Duration, @(default), 1500)),
    send(Plotter, axis, plot_axis(y, Min, Max, @(default), 400)),
-   send(Plotter, graph, new(Plot, plot_graph)),
-   send(Plot, colour, green),
+   send(Plotter, graph, new(X_Plot, plot_graph)),
+   send(X_Plot, colour, green),
+   send(Plotter, graph, new(Y_Plot, plot_graph)),
+   send(Y_Plot, colour, blue),
    send(W, open),
-   member(p(T, V), Points),
-   send(Plot, append, T, V),
-   sleep(0.01),
+   member(p(T, X, Y), Points),
+   send(X_Plot, append, T, X),
+   send(Y_Plot, append, T, Y),
    fail.
+
+%!     b_a(B0, B1, B2, A0, A1, A2) is det.
+
+b_a(0.06745527, 0.13491055, 0.06745527, 1, -1.1429805, 0.4128016).
+
 
 %! step(+Time_Of_Step, +Step_Size, +Time, -X) is det.
 
@@ -78,44 +94,75 @@ step(Time_Of_Step, Step_Size, T, X) :-
    ;   X = Step_Size
    ).
 
+%!  sin(+Frequency, +Time, -X) is det.
+%
+%  @arg Frequency Hz
+
+sin(Frequency, Time, X) :-
+   X is sin(2*pi * Frequency * Time).
+
 
 %! y_values(+Points, -Y_Values) is det.
 
 y_values([], []).
-y_values([p(_, Y)|T1], [Y|T2]) :-
+y_values([p(_, _, Y)|T1], [Y|T2]) :-
    y_values(T1, T2).
 
 
-%!  sodt(+X_Pred, +Duration, +Sampling_Frequency, +A1:number,
-%!       +A2:number, +B1:number, +B2:number, -Points) is det.
+%!  sodt(+X_Pred, +Duration, +Sampling_Frequency, +B0, +B1, +B2,
+%!       +A0, +A1, +A2, -Points) is det.
 %
-%  Second-order discrete-time linear system
-%  Difference Equation: A second-order discrete-time linear system can be represented by the
-%  following general form of a difference equation:
+%  Applies a second-order linear discrete filter (direct form II transposed).
 %
-%  y[k]+a1.y[k-1]+a2.y[k-2] = b1.x[k-1]+b2.x[k-2]
-
+%  The general difference equation for a second-order filter is:
+%
+%  a0.y[n]=b0.x[n]+b1.x[n-1]+b2.x[n-2]-a1.y[n-1]-a2.y[n-2]
+%
+%  Assumes A0 is normalized to 1.
+%
+%  B0, B1, B2 are the numerator coefficients
+%  A0, A1, A2 are the denominator coefficients
+%
+%  Reference
+%  https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter.html
+%
 %  @arg X_Pred closure foo(..., Time, X)
-%  @arg Y_Series list of p(T, V)
+%  @arg Y_Series list of p(T, X, Y)
 
-sodt(X_Pred, Duration, Sampling_Frequency, A1, A2, B1, B2, Points) :-
+sodt(X_Pred, Duration, Sampling_Frequency, B0, B1, B2, A0, A1, A2, Points) :-
+   assertion(A0 == 1),
    N is integer(Duration * Sampling_Frequency),
    Time_Step is 1 / Sampling_Frequency,
-   sodt_1(N, X_Pred, 0, Time_Step, 0, 0, 0, 0, A1, A2, B1, B2, Points).
+   D1 = 0,
+   D2 = 0,
+   sodt_1(N, X_Pred, 0, Time_Step, D1, D2, B0, B1, B2, A0, A1, A2, Points).
 
 
-%!  sodt_1(+K, +X_Pred, +Time, +Time_Step, +X2, +X1, +Y2,
-%!         +Y1, +A1, +A2, +B1, +B2, -Points) is det.
-%  X1 means x[k-1], X2 means x[k-1] etc, same for Y1 etc
+%!  sodt_1(+K, +X_Pred, +Time, +Time_Step, +D1, +D2, +B0, +B1, +B2,
+%         +A0, +A1, +A2, -Points) is det.
+%
+% From Python implementation:
+%
+% Difference equations for Direct Form II Transposed (second order)
+%    y[n] = b0*x[n] + d1[n-1]
+%    d1[n] = b1*x[n] - a1*y[n] + d2[n-1]
+%    d2[n] = b2*x[n] - a2*y[n]
+%
+%    for n in range(len(x)):
+%        y[n] = b[0] * x[n] + d1
+%        d1 = b[1] * x[n] - a[1] * y[n] + d2
+%        d2 = b[2] * x[n] - a[2] * y[n]
 
 sodt_1(0, _, _, _, _, _, _, _, _, _, _, _, []) :-
    !.
-sodt_1(K, X_Pred, T, Time_Step, X2, X1, Y2, Y1, A1, A2, B1, B2, [p(T, Y0)|Points]) :-
-    call(X_Pred, T, X0),
-    Y0 is B1 * X1 + B2 * X2 - A1 * Y1 - A2 * Y2,
+sodt_1(K, X_Pred, T, Time_Step, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, X, Y)|Points]) :-
+    call(X_Pred, T, X),
+    Y is B0 * X + D1,
+    D1_New is B1 * X - A1 * Y + D2,
+    D2_New is B2 * X - A2 * Y,
     KK is K-1,
     T_Next is T + Time_Step,
-    sodt_1(KK, X_Pred, T_Next, Time_Step, X1, X0, Y1, Y0, A1, A2, B1, B2, Points).
+    sodt_1(KK, X_Pred, T_Next, Time_Step, D1_New, D2_New, B0, B1, B2, A0, A1, A2, Points).
 
 
 
