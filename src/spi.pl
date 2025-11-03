@@ -44,27 +44,29 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 */
 
 :- meta_predicate
-   sodt(2, -, +, +, +, +, +, +, +),
-   sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, +).
+   sodt(2, +, +, +, +, +, +, -),
+   sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, -).
 
 
 %!  ts is semidet.
 
 user:ts :-
-   N = 100,
-   sodt(step(0.01, 0.05), Y, 0, N, 0.1, 0.99, 0.04, 1, 0),
+   Duration = 1.0,
+   Sampling_Frequency = 1000,
+   sodt(step(0.0, 0.05), Duration, Sampling_Frequency, 0.1239, 0.99, -1.143, 0.412, Points),
+   y_values(Points, Y_Values),
+   min_member(Min, Y_Values),
+   max_member(Max, Y_Values),
    new(W, auto_sized_picture(sodt)),
    send(W, max_size, size(2000, 600)),
    send(W, display, new(Plotter, plotter)),
-   send(Plotter, axis, plot_axis(x, 0.0, N, @(default), 1500)),
-   send(Plotter, axis, plot_axis(y, 0.0, 0.05, @(default), 400)),
+   send(Plotter, axis, plot_axis(x, 0.0, Duration, @(default), 1500)),
+   send(Plotter, axis, plot_axis(y, Min, Max, @(default), 400)),
    send(Plotter, graph, new(Plot, plot_graph)),
    send(Plot, colour, green),
    send(W, open),
-   member(p(T, V), Y),
-   writeln((T,V)),
-   T_Plot is T * 500,
-   send(Plot, append, T_Plot, V),
+   member(p(T, V), Points),
+   send(Plot, append, T, V),
    sleep(0.01),
    fail.
 
@@ -77,8 +79,15 @@ step(Time_Of_Step, Step_Size, T, X) :-
    ).
 
 
-%!  sodt(+X_Pred, -Y_Series, +Time, +N, +Time_Step, +A1:number,
-%!       +A2:number, +B1:number, +B2:number) is det.
+%! y_values(+Points, -Y_Values) is det.
+
+y_values([], []).
+y_values([p(_, Y)|T1], [Y|T2]) :-
+   y_values(T1, T2).
+
+
+%!  sodt(+X_Pred, +Duration, +Sampling_Frequency, +A1:number,
+%!       +A2:number, +B1:number, +B2:number, -Points) is det.
 %
 %  Second-order discrete-time linear system
 %  Difference Equation: A second-order discrete-time linear system can be represented by the
@@ -89,22 +98,24 @@ step(Time_Of_Step, Step_Size, T, X) :-
 %  @arg X_Pred closure foo(..., Time, X)
 %  @arg Y_Series list of p(T, V)
 
-sodt(X_Pred, Y_Series, Time, N, Time_Step, A1, A2, B1, B2) :-
-   sodt_1(N, X_Pred, Y_Series, Time, Time_Step, 0, 0, 0, 0, A1, A2, B1, B2).
+sodt(X_Pred, Duration, Sampling_Frequency, A1, A2, B1, B2, Points) :-
+   N is integer(Duration * Sampling_Frequency),
+   Time_Step is 1 / Sampling_Frequency,
+   sodt_1(N, X_Pred, 0, Time_Step, 0, 0, 0, 0, A1, A2, B1, B2, Points).
 
 
-%!  sodt_1(+K, +X_Pred, -Y_Series, +Time, +Time_Step, +X2, +X1, +Y2,
-%!         +Y1, +A1, +A2, +B1, +B2) is det.
+%!  sodt_1(+K, +X_Pred, +Time, +Time_Step, +X2, +X1, +Y2,
+%!         +Y1, +A1, +A2, +B1, +B2, -Points) is det.
 %  X1 means x[k-1], X2 means x[k-1] etc, same for Y1 etc
 
-sodt_1(0, _, [], _, _, _, _, _, _, _, _, _, _) :-
+sodt_1(0, _, _, _, _, _, _, _, _, _, _, _, []) :-
    !.
-sodt_1(K, X_Pred, [p(T, Y0)|Y_Series], T, Time_Step, X2, X1, Y2, Y1, A1, A2, B1, B2) :-
+sodt_1(K, X_Pred, T, Time_Step, X2, X1, Y2, Y1, A1, A2, B1, B2, [p(T, Y0)|Points]) :-
     call(X_Pred, T, X0),
     Y0 is B1 * X1 + B2 * X2 - A1 * Y1 - A2 * Y2,
     KK is K-1,
     T_Next is T + Time_Step,
-    sodt_1(KK, X_Pred, Y_Series, T_Next, Time_Step, X1, X0, Y1, Y0, A1, A2, B1, B2).
+    sodt_1(KK, X_Pred, T_Next, Time_Step, X1, X0, Y1, Y0, A1, A2, B1, B2, Points).
 
 
 
