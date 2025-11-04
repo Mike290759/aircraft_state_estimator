@@ -33,6 +33,7 @@ SOFTWARE.
 :- use_module(library(lists), [min_member/2, max_member/2, member/2]).
 :- use_module(library(pce), [new/2, send/2]).
 :- use_module(library(debug), [assertion/1]).
+:- use_module(library(clpfd)).
 
 /** <module> System Parameter Identification
 
@@ -84,10 +85,34 @@ user:ts :-
    send(Blue_Plot, colour, blue),
    send(Plotter, graph, new(Black_Plot, plot_graph)),
    send(Black_Plot, colour, black),
+   legend([item('Measured Step Response', black), item('Modelled Step Response', blue)], Plotter, 30, 80),
    send(W, open),
-   forall(member(p(T, Y), SODT_Points), send(Blue_Plot, append, T, Y)),                 % Modelled step response
-   forall(member(p(T, M), Measured_Step_Response), send(Black_Plot, append, T, M)),     % Measured step response
+   forall(member(p(T, Y), SODT_Points), send(Blue_Plot, append, T, Y)),
+   forall(member(p(T, M), Measured_Step_Response), send(Black_Plot, append, T, M)),
    fail.
+
+
+%! legend(+Items, +Plotter, +Y, +Spacing) is det.
+
+legend(Items, Plotter, Y, Spacing) :-
+   get(Plotter, width, Plotter_Width),
+   legend_1(Items, Plotter, X_Left, Y, Spacing, 0, Total_Width),
+   Left_Margin #= X_Left,
+   member(Slop, [0, 1]), % Because Plotter_Width - Total_Width may be odd
+   Right_Margin #= Left_Margin + Slop,
+   Left_Margin + Total_Width + Right_Margin #= Plotter_Width.
+
+
+legend_1([], _, _, _, _, W, W).
+legend_1([item(Legend_Text, Colour)|T], Plotter, X, Y, Spacing, Width, Total_Width) :-
+   format(atom(Prefixed_Text), '--------- ~w', [Legend_Text]),
+   new(Text, text(Prefixed_Text)),
+   send(Text, colour, Colour),
+   get(Text, width, Text_Width),
+   freeze(X, send(Plotter, display, Text, point(X, Y))),
+   Next_X #= X + Text_Width + Spacing,
+   New_Width #= Width + Text_Width + Spacing,
+   legend_1(T, Plotter, Next_X, Y, Spacing, New_Width, Total_Width).
 
 
 %!  b_a(B0, B1, B2, A0, A1, A2) is det.
