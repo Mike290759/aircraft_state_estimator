@@ -368,7 +368,7 @@ pid_controller_1(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Err
 pid_controller_2(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History_0, Elapsed_Time, Step_Response_Stream) :-
     Guard,
     !,
-    (   user:capture_open_loop_step_response(PID_Id, Step_Response_Stream, Elapsed_Time, Control)
+    (   user:capture_open_loop_step_response(PID_Id, Sample_Time, Step_Response_Stream, Elapsed_Time, Control)
     ->  call(Control_Pred, Control),
         call(State_Value_Pred, State_Value),
         in_pce_thread(send(Step_Response_Plot, append, Elapsed_Time, State_Value)),
@@ -753,9 +753,9 @@ http_set_prop(Property_Path, Value) :-
     debug(swifg, '~q', [http_set_prop(Property_Path, Value)]).
 
 
-%! user:capture_open_loop_step_response(+PID_Id, +Step_Response_Stream, +Elapsed_Time, -Control) is semidet.
+%! user:capture_open_loop_step_response(+PID_Id, +Sample_Time, +Step_Response_Stream, +Elapsed_Time, -Control) is semidet.
 
-user:capture_open_loop_step_response(climb, Step_Response_Stream, Elapsed_Time, Step_Size) :-
+user:capture_open_loop_step_response(climb, Sample_Time, Step_Response_Stream, Elapsed_Time, Step_Size) :-
     flag(open_loop_step_response_capture_underway, Capture_Underway, Capture_Underway),
     (   Capture_Underway == 1
     ->  true
@@ -764,5 +764,6 @@ user:capture_open_loop_step_response(climb, Step_Response_Stream, Elapsed_Time, 
         Step_Size = 0.05,
         debug(swifg, 'climb step response test started at ~ws', [Elapsed_Time]),
         format(Step_Response_Stream, '~q.~n', [step_size(Step_Size)]),
+        format(Step_Response_Stream, '~q.~n', [sample_time(Sample_Time)]),
         flag(open_loop_step_response_capture_underway, _, 1)
     ).

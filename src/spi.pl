@@ -56,15 +56,13 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 %!  ts is semidet.
 
 user:ts :-
-   Duration = 200,
-   Sampling_Frequency = 10,  % Hz
-   measured_open_loop_step_response(dat('step_response.dat'), Step_Size, Measured_Open_Loop_Step_Response),
-
-   Input_Fn = step(0.0, Step_Size),  % Use the Step_Size from the "experimental" measurement
+   Duration = 155,  % Duration of the measured response we want to consider
+   measured_open_loop_step_response(dat('step_response.dat'), Duration, Sample_Time, Step_Size, Measured_Open_Loop_Step_Response),
+   length(Measured_Open_Loop_Step_Response, N),
 
    b_a(B0, B1, B2, A0, A1, A2),
-   sodt(Input_Fn, Duration, Sampling_Frequency, B0, B1, B2, A0, A1, A2, SODT_Points),
-   append(SODT_Points, Measured_Open_Loop_Step_Response, All_Points),
+   sodt(step(0.0, Step_Size), N, Sample_Time, B0, B1, B2, A0, A1, A2, Modelled_Open_Loop_Step_Response),
+   append(Modelled_Open_Loop_Step_Response, Measured_Open_Loop_Step_Response, All_Points),
    y_values(All_Points, Y_Values),
    min_member(Min, Y_Values),
    max_member(Max, Y_Values),
@@ -80,7 +78,7 @@ user:ts :-
    send(Black_Plot, colour, black),
    legend([item('Measured Open Loop Step Response', black), item('Modelled Open Loop Step Response', blue)], Plotter, 30, 80),
    send(W, open),
-   forall(member(p(T, Y), SODT_Points), send(Blue_Plot, append, T, Y)),
+   forall(member(p(T, Y), Modelled_Open_Loop_Step_Response), send(Blue_Plot, append, T, Y)),
    forall(member(p(T, M), Measured_Open_Loop_Step_Response), send(Black_Plot, append, T, M)),
    fail.
 
@@ -130,26 +128,38 @@ sin(Frequency, Time, X) :-
    X is sin(2*pi * Frequency * Time).
 
 
-%! measured_open_loop_step_response(+File_Name, -Step_Size, -Step_Response) is det.
+%! measured_open_loop_step_response(+File_Name, +Duration, -Sample_Time,
+%!                                  -Step_Size, -Step_Response) is
+%!                                  det.
 %
 %  Supply the data captured in the PID loop - see capture_open_loop_step_response/3
 %
+%  @arg Duration cutoff time for the number of data points to be returned
+%  @arg Sample_Time the length of time between measurements
+%  @arg Step_Size the size of input step
+%  @arg N the number of data points in the step response series
 %  @arg Step_Response list p(T, V)
 
-measured_open_loop_step_response(File_Name, Step_Size, Step_Response) :-
+measured_open_loop_step_response(File_Name, Duration, Sample_Time, Step_Size, Step_Response) :-
    absolute_file_name(File_Name, Absolute_File_Name),   % Allow for path aliases
    setup_call_cleanup(open(Absolute_File_Name, read, In),
-                      read_step_response(In, Step_Size, L),
+                      read_step_response(In, Sample_Time, Step_Size, L),
                       close(In)),
    L = [p(T0, _)|_],
-   rebase_time(L, T0, Step_Response).
+   T_End is T0 + Duration,
+   rebase_time_and_trim_series(L, T0, T_End, Step_Response).
 
 
-%!  read_step_response(+In:stream, -Step_Size, -Step_Response) is det.
+%!  read_step_response(+In:stream, -Sample_Time, -Step_Size, -Step_Response) is det.
 
-read_step_response(In, Step_Size, Step_Response) :-
-   read_term(In, Term, []),   % Must be first term in file
-   (   Term = step_size(Step_Size)
+read_step_response(In, Sample_Time, Step_Size, Step_Response) :-
+   read_term(In, Sample_Time_Term, []),   % Must be the first term in file
+   (   Sample_Time_Term = sample_time(Sample_Time)
+   ->  true
+   ;   throw(sample_time_expected)
+   ),
+   read_term(In, Step_Size_Term, []),   % Must be the second term in file
+   (   Step_Size_Term = step_size(Step_Size)
    ->  true
    ;   throw(step_size_expected)
    ),
@@ -157,22 +167,30 @@ read_step_response(In, Step_Size, Step_Response) :-
            point(In, T, V),
            Step_Response).
 
+
+%! point(+In:stream, -T, -V) is det.
+
 point(In, T, V) :-
    repeat,
    read_term(In, Term, []),
    (   Term == end_of_file
    ->  !,
        fail
+
    ;   Term = p(T, V)
+   ->  true
+
+   ;   !,
+       fail
    ).
 
 
-%!  rebase_time(+L1, +T0, -L2) is det.
-
-rebase_time([], _, []).
-rebase_time([p(T, V)|T1], T0, [p(T_Rebased, V)|T2]) :-
+%!  rebase_time_and_trim_series(+L, +T0, +T_End, -Step_Response) is det.
+??? TBD
+rebase_time_and_trim_series([], _, _, []).
+rebase_time_and_trim_series([p(T, V)|T1], T0, [p(T_Rebased, V)|T2]) :-
     T_Rebased is T-T0,
-    rebase_time(T1, T0, T2).
+    rebase_time_and_trim_series(T1, T0, T2).
 
 
 %! y_values(+Points, -Y_Values) is det.
@@ -182,7 +200,7 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
    y_values(T1, T2).
 
 
-%!  sodt(+X_Pred, +Duration, +Sampling_Frequency, +B0, +B1, +B2,
+%!  sodt(+X_Pred, +N, +Sampling_Frequency, +B0, +B1, +B2,
 %!       +A0, +A1, +A2, -Points) is det.
 %
 %  Applies a second-order linear discrete filter (direct form II transposed).
@@ -199,13 +217,13 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
 %  Reference
 %  https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter.html
 %
+%  @arg N series length
 %  @arg X_Pred closure foo(..., Time, X)
 %  @arg Y_Series list of p(T, Y)
 
-sodt(X_Pred, Duration, Sampling_Frequency, B0, B1, B2, A0, A1, A2, Points) :-
+sodt(X_Pred, N, Sample_Time, B0, B1, B2, A0, A1, A2, Points) :-
    assertion(A0 == 1),
-   N is integer(Duration * Sampling_Frequency),
-   Time_Step is 1 / Sampling_Frequency,
+   Time_Step = Sample_Time,
    D1 = 0,
    D2 = 0,
    sodt_1(N, X_Pred, 0, Time_Step, D1, D2, B0, B1, B2, A0, A1, A2, Points).
