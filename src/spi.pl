@@ -98,9 +98,10 @@ legend(Items, Plotter, Y, Spacing) :-
    get(Plotter, width, Plotter_Width),
    legend_1(Items, Plotter, X_Left, Y, Spacing, 0, Total_Width),
    Left_Margin #= X_Left,
-   member(Slop, [0, 1]), % Because Plotter_Width - Total_Width may be odd
+   Slop in 0..1,         % Because Plotter_Width - Total_Width may be odd
    Right_Margin #= Left_Margin + Slop,
-   Left_Margin + Total_Width + Right_Margin #= Plotter_Width.
+   Left_Margin + Total_Width + Right_Margin #= Plotter_Width,  % Center the legend
+   once(labeling([min(Slop)], [Slop])).
 
 
 legend_1([], _, _, _, _, W, W).
