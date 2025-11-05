@@ -358,7 +358,7 @@ graph(PID_Id, Y_Scale_Max, Error_Plot, Control_Plot, Step_Response_Plot) :-
 %   length set by error_history_window_size/1
 
 :- dynamic
-    user:capture_step_response/2.
+    user:capture_open_loop_step_response/4.
 
 pid_controller_1(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History_0, Elapsed_Time) :-
     setup_call_cleanup(open('step_response.dat', write, Step_Response_Stream),
@@ -368,7 +368,7 @@ pid_controller_1(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Err
 pid_controller_2(PID_Id, Guard, Setpoint_Pred, State_Value_Pred, Conditioned_Error_Pred, Control_Pred, P, I, D, Control_Min, Control_Max, Error_Plot, Control_Plot, Step_Response_Plot, Y_Scale_Max, Sample_Time, Error_History_0, Elapsed_Time, Step_Response_Stream) :-
     Guard,
     !,
-    (   user:capture_step_response(PID_Id, Elapsed_Time, Control)
+    (   user:capture_open_loop_step_response(PID_Id, Step_Response_Stream, Elapsed_Time, Control)
     ->  call(Control_Pred, Control),
         call(State_Value_Pred, State_Value),
         in_pce_thread(send(Step_Response_Plot, append, Elapsed_Time, State_Value)),
@@ -753,14 +753,16 @@ http_set_prop(Property_Path, Value) :-
     debug(swifg, '~q', [http_set_prop(Property_Path, Value)]).
 
 
-%! user:capture_step_response(+PID_Id, +Elapsed_Time, -Control) is semidet.
+%! user:capture_open_loop_step_response(+PID_Id, +Step_Response_Stream, +Elapsed_Time, -Control) is semidet.
 
-user:capture_step_response(climb, Elapsed_Time, 0.05) :-
-    flag(step_response_underway, Step_Response_Underway, Step_Response_Underway),
-    (   Step_Response_Underway == 1
+user:capture_open_loop_step_response(climb, Step_Response_Stream, Elapsed_Time, Step_Size) :-
+    flag(open_loop_step_response_capture_underway, Capture_Underway, Capture_Underway),
+    (   Capture_Underway == 1
     ->  true
     ;   http_get_prop('/position/altitude-agl-ft', Altitude_AGL_Ft),
         Altitude_AGL_Ft > 500,
+        Step_Size = 0.05,
         debug(swifg, 'climb step response test started at ~ws', [Elapsed_Time]),
-        flag(step_response_underway, _, 1)
+        format(Step_Response_Stream, '~q.~n', [step_size(Step_Size)]),
+        flag(open_loop_step_response_capture_underway, _, 1)
     ).

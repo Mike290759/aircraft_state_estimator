@@ -56,22 +56,15 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 %!  ts is semidet.
 
 user:ts :-
-   /*
-   Duration = 1.0,
-   Sampling_Frequency = 1000,
-%  Input_Fn = step(0.0, 0.05),
-%  Input_Fn = sin(20),
-%  Display_Duration is Duration / 10.0,
-*/
    Duration = 200,
    Sampling_Frequency = 10,  % Hz
-   Display_Duration = Duration,
-   step_response(dat('step_response.dat'), Measured_Step_Response),
-   Input_Fn = step(0.0, 0.05),
+   measured_open_loop_step_response(dat('step_response.dat'), Step_Size, Measured_Open_Loop_Step_Response),
+
+   Input_Fn = step(0.0, Step_Size),  % Use the Step_Size from the "experimental" measurement
 
    b_a(B0, B1, B2, A0, A1, A2),
    sodt(Input_Fn, Duration, Sampling_Frequency, B0, B1, B2, A0, A1, A2, SODT_Points),
-   append(SODT_Points, Measured_Step_Response, All_Points),
+   append(SODT_Points, Measured_Open_Loop_Step_Response, All_Points),
    y_values(All_Points, Y_Values),
    min_member(Min, Y_Values),
    max_member(Max, Y_Values),
@@ -79,16 +72,16 @@ user:ts :-
    new(W, auto_sized_picture(Title)),
    send(W, max_size, size(2000, 600)),
    send(W, display, new(Plotter, plotter)),
-   send(Plotter, axis, plot_axis(x, 0.0, Display_Duration, @(default), 1500)),
+   send(Plotter, axis, plot_axis(x, 0.0, Duration, @(default), 1500)),
    send(Plotter, axis, plot_axis(y, Min, Max, @(default), 400)),
    send(Plotter, graph, new(Blue_Plot, plot_graph)),
    send(Blue_Plot, colour, blue),
    send(Plotter, graph, new(Black_Plot, plot_graph)),
    send(Black_Plot, colour, black),
-   legend([item('Measured Step Response', black), item('Modelled Step Response', blue)], Plotter, 30, 80),
+   legend([item('Measured Open Loop Step Response', black), item('Modelled Open Loop Step Response', blue)], Plotter, 30, 80),
    send(W, open),
    forall(member(p(T, Y), SODT_Points), send(Blue_Plot, append, T, Y)),
-   forall(member(p(T, M), Measured_Step_Response), send(Black_Plot, append, T, M)),
+   forall(member(p(T, M), Measured_Open_Loop_Step_Response), send(Black_Plot, append, T, M)),
    fail.
 
 
@@ -137,18 +130,41 @@ sin(Frequency, Time, X) :-
    X is sin(2*pi * Frequency * Time).
 
 
-%! step_response(+File_Name, -Step_Response) is det.
+%! measured_open_loop_step_response(+File_Name, -Step_Size, -Step_Response) is det.
 %
-%  @arg Step_Response list p(T, X)
+%  Supply the data captured in the PID loop - see capture_open_loop_step_response/3
+%
+%  @arg Step_Response list p(T, V)
 
-:- dynamic
-   p/2.
-
-step_response(File_Name, Step_Response) :-
-   consult(File_Name),
-   findall(p(T, X), p(T, X), L),
-   [p(T0, _)|_] = L,
+measured_open_loop_step_response(File_Name, Step_Size, Step_Response) :-
+   absolute_file_name(File_Name, Absolute_File_Name),   % Allow for path aliases
+   setup_call_cleanup(open(Absolute_File_Name, read, In),
+                      read_step_response(In, Step_Size, L),
+                      close(In)),
+   L = [p(T0, _)|_],
    rebase_time(L, T0, Step_Response).
+
+
+%!  read_step_response(+In:stream, -Step_Size, -Step_Response) is det.
+
+read_step_response(In, Step_Size, Step_Response) :-
+   read_term(In, Term, []),   % Must be first term in file
+   (   Term = step_size(Step_Size)
+   ->  true
+   ;   throw(step_size_expected)
+   ),
+   findall(p(T, V),
+           point(In, T, V),
+           Step_Response).
+
+point(In, T, V) :-
+   repeat,
+   read_term(In, Term, []),
+   (   Term == end_of_file
+   ->  !,
+       fail
+   ;   Term = p(T, V)
+   ).
 
 
 %!  rebase_time(+L1, +T0, -L2) is det.
@@ -157,17 +173,6 @@ rebase_time([], _, []).
 rebase_time([p(T, V)|T1], T0, [p(T_Rebased, V)|T2]) :-
     T_Rebased is T-T0,
     rebase_time(T1, T0, T2).
-
-
-%! measured_step_response(+Step_Response, +Time, -X) is det.
-%
-%  @arg Step_Response list of p(T, X)
-
-measured_step_response(Step_Response, Time, X) :-
-   nextto(p(T1, X0), p(T2, _), Step_Response),
-   T1 =< Time, Time < T2,
-   !,
-   X = X0.
 
 
 %! y_values(+Points, -Y_Values) is det.
