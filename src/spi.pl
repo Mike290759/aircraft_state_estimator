@@ -50,7 +50,8 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 
 :- meta_predicate
    sodt(2, +, +, +, +, +, +, +, +, -),
-   sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, -).
+   sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, -),
+   galg(2, +, -, -).
 
 
 %!  ts is semidet.
@@ -58,15 +59,13 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, Sample_Time, Step_Size, Measured_Open_Loop_Step_Response),
-   length(Measured_Open_Loop_Step_Response, N),
-
-   b_a(B0, B1, B2, A0, A1, A2),
-   sodt(step(0.0, Step_Size), N, Sample_Time, B0, B1, B2, A0, A1, A2, Modelled_Open_Loop_Step_Response),
+   Initial_Genes = [0.5, 0.5, 0.5, 0.5, 0.5],
+   galg(fitness(Measured_Open_Loop_Step_Response, Sample_Time, Step_Size, Modelled_Open_Loop_Step_Response), Initial_Genes, Better_Genes, _Fitness),
    append(Modelled_Open_Loop_Step_Response, Measured_Open_Loop_Step_Response, All_Points),
    y_values(All_Points, Y_Values),
    min_member(Min, Y_Values),
    max_member(Max, Y_Values),
-   format(string(Title), 'sodt - ~w', [b_a(B0, B1, B2, A0, A1, A2)]),
+   format(string(Title), 'sodt - ~w', [Better_Genes]),
    new(W, auto_sized_picture(Title)),
    send(W, max_size, size(2000, 600)),
    send(W, display, new(Plotter, plotter)),
@@ -88,11 +87,13 @@ user:ts :-
 legend(Items, Plotter, Y, Spacing) :-
    get(Plotter, width, Plotter_Width),
    legend_1(Items, Plotter, X_Left, Y, Spacing, 0, Total_Width),
-   Left_Margin #= X_Left,
+   Left_Margin in 0..Total_Width,
+   Right_Margin in 0..Total_Width,
+   Left_Margin = X_Left,
    Slop in 0..1,         % Because Plotter_Width - Total_Width may be odd
    Right_Margin #= Left_Margin + Slop,
    Left_Margin + Total_Width + Right_Margin #= Plotter_Width,  % Center the legend
-   once(labeling([min(Slop)], [Slop])).
+   once(labeling([min(Slop)], [Slop, Left_Margin, Right_Margin])).
 
 
 legend_1([], _, _, _, _, W, W).
@@ -107,11 +108,6 @@ legend_1([item(Legend_Text, Colour)|T], Plotter, X, Y, Spacing, Width, Total_Wid
    legend_1(T, Plotter, Next_X, Y, Spacing, New_Width, Total_Width).
 
 
-%!  b_a(B0, B1, B2, A0, A1, A2) is det.
-
-b_a(0.06745527, 0.13491055, 0.06745527, 1, -1.1429805, 0.4128016).
-
-
 %! step(+Time_Of_Step, +Step_Size, +Time, -X) is det.
 
 step(Time_Of_Step, Step_Size, T, X) :-
@@ -119,13 +115,6 @@ step(Time_Of_Step, Step_Size, T, X) :-
    ->  X = 0
    ;   X = Step_Size
    ).
-
-%!  sin(+Frequency, +Time, -X) is det.
-%
-%  @arg Frequency Hz
-
-sin(Frequency, Time, X) :-
-   X is sin(2*pi * Frequency * Time).
 
 
 %! measured_open_loop_step_response(+File_Name, +Duration, -Sample_Time,
@@ -145,9 +134,7 @@ measured_open_loop_step_response(File_Name, Duration, Sample_Time, Step_Size, St
    setup_call_cleanup(open(Absolute_File_Name, read, In),
                       read_step_response(In, Sample_Time, Step_Size, L),
                       close(In)),
-   L = [p(T0, _)|_],
-   T_End is T0 + Duration,
-   rebase_time_and_trim_series(L, T0, T_End, Step_Response).
+   rebase_time_and_trim(L, Duration, Step_Response).
 
 
 %!  read_step_response(+In:stream, -Sample_Time, -Step_Size, -Step_Response) is det.
@@ -185,12 +172,28 @@ point(In, T, V) :-
    ).
 
 
-%!  rebase_time_and_trim_series(+L, +T0, +T_End, -Step_Response) is det.
-??? TBD
-rebase_time_and_trim_series([], _, _, []).
-rebase_time_and_trim_series([p(T, V)|T1], T0, [p(T_Rebased, V)|T2]) :-
-    T_Rebased is T-T0,
-    rebase_time_and_trim_series(T1, T0, T2).
+%!  rebase_time_and_trim(+L1, +Duration, -L2) is det.
+%
+%  Make the time of the first item 0.0 and adjust remaining points
+%  accordingly.
+%
+%  Drop points more than Duration after the first point
+
+rebase_time_and_trim(L1, Duration, L2) :-
+   L1 = [p(T0, _)|_],
+   T_Cutoff is T0 + Duration,
+   rebase_time_and_trim_1(L1, T0, T_Cutoff, L2).
+
+
+%!  rebase_time_and_trim(+L1, +T0, +T_Cutoff, -L2) is det.
+
+rebase_time_and_trim_1([], _, _, []).
+rebase_time_and_trim_1([p(T, _)|_], _, T_Cutoff, []) :-
+   T > T_Cutoff,
+   !.
+rebase_time_and_trim_1([p(T, V)|L1], T0, T_Cutoff, [p(T1, V)|L2]) :-
+    T1 is T-T0,
+    rebase_time_and_trim_1(L1, T0, T_Cutoff, L2).
 
 
 %! y_values(+Points, -Y_Values) is det.
@@ -229,8 +232,7 @@ sodt(X_Pred, N, Sample_Time, B0, B1, B2, A0, A1, A2, Points) :-
    sodt_1(N, X_Pred, 0, Time_Step, D1, D2, B0, B1, B2, A0, A1, A2, Points).
 
 
-%!  sodt_1(+K, +X_Pred, +Time, +Time_Step, +D1, +D2, +B0, +B1, +B2,
-%         +A0, +A1, +A2, -Points) is det.
+%!  sodt_1(+K, +X_Pred, +Time, +Time_Step, +D1, +D2, +B0, +B1, +B2, +A0, +A1, +A2, -Points) is det.
 %
 % From Python implementation:
 %
@@ -255,4 +257,30 @@ sodt_1(K, X_Pred, T, Time_Step, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, Y)|Points]
     T_Next is T + Time_Step,
     sodt_1(KK, X_Pred, T_Next, Time_Step, D1_New, D2_New, B0, B1, B2, A0, A1, A2, Points).
 
+
+%! fitness(+Measured_Open_Loop_Step_Response, +Sample_Time, +Step_Size,
+%!         -Modelled_Open_Loop_Step_Response, +Genes, -Fitness) is det.
+
+fitness(Measured_Open_Loop_Step_Response, Sample_Time, Step_Size, Modelled_Open_Loop_Step_Response, [B0, B1, B2, A1, A2], Fitness) :-
+   length(Measured_Open_Loop_Step_Response, N),
+   sodt(step(0.0, Step_Size), N, Sample_Time, B0, B1, B2, 1, A1, A2, Modelled_Open_Loop_Step_Response),
+   fitness_1(Measured_Open_Loop_Step_Response, Modelled_Open_Loop_Step_Response, 0, Fitness).
+
+
+%! fitness_1(+Measured_Open_Loop_Step_Response,
+%!           +Modelled_Open_Loop_Step_Response, +Fitness_Accum,
+%!           -Fitness) is det.
+
+fitness_1([], [], Fitness, Fitness).
+fitness_1([p(_, V1)|T1], [p(_, V2)|T2], F0, F) :-
+   F1 is F0 + (V1-V2) ** 2,
+   fitness_1(T1, T2, F1, F).
+
+
+
+%!  galg(+Fitness_Pred, +Initial_Genes, -Better_Genes, -Fitness) is det.
+
+galg(Fitness_Pred, Genes, Better_Genes, Fitness) :-
+   call(Fitness_Pred, Genes, Fitness),
+   Better_Genes = Genes.
 
