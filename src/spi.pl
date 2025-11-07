@@ -30,8 +30,8 @@ SOFTWARE.
           [
           ]).
 
-:- use_module(library(lists), [min_member/2, max_member/2, member/2]).
-:- use_module(library(pce), [new/2, send/2]).
+:- use_module(library(lists), [min_member/2, max_member/2, member/2, append/3]).
+:- use_module(library(pce), [new/2, send/2, get/3]).
 :- use_module(library(debug), [assertion/1]).
 :- use_module(library(clpfd)).
 
@@ -283,4 +283,85 @@ fitness_1([p(_, V1)|T1], [p(_, V2)|T2], F0, F) :-
 galg(Fitness_Pred, Genes, Better_Genes, Fitness) :-
    call(Fitness_Pred, Genes, Fitness),
    Better_Genes = Genes.
+
+
+%! value_to_gene(+Value, -Bits) is det.
+%
+%  A two's complement representation is used.
+%
+%  Positive numbers:
+%    The binary representation is the same as its unsigned counterpart.
+%
+%  Negative numbers:
+%    The two's complement is found by taking the
+%    positive version, inverting all its bits, and then adding 1
+%    ignoring any overflow
+%
+%  Example with 16 bits and range of -100.0..100.0:
+%    -100.0 --> ???
+%       0.0 -->
+%    +100.0 -->
+%
+%  @arg Value float @arg Bits list of 1's and 0's [Sign_Bit, MSB, ... LSB]
+
+value_to_gene(Value, Bits) :-
+   gene_width(Width),
+   gene_value_range(Range),
+   assertion((-Range =< Value, Value =< Range)),
+   Abs_Value is abs(Value),
+   format('Abs_Value=~f~n', [Abs_Value]),
+   I0 is integer((1<<(Width-1)-1) * Abs_Value/Range),
+   format('I0=~2r~n', [I0]),
+   (   Value < 0
+   ->  I1 is I0 + 1,
+       I is I1 /\ ((1<<Width)-1)   % One's complement plus 1, ignore overflow
+
+   ;   I = I0
+   ),
+   format('I=~2r [~d]~n', [I,I]),
+   int_to_bits(I, Width, Bits).
+
+
+%! int_to_bits(+I, +K, -Encoding) is det.
+
+int_to_bits(_, 0, []) :-
+   !.
+int_to_bits(I, K, [Bit|T]) :-
+   KK is K - 1,
+   Bit is getbit(I, KK),
+   int_to_bits(I, KK, T).
+
+
+gene_width(16).
+gene_value_range(100.0).  % Range is -100.0 .. 100.0
+
+
+%! gene_to_value(+Encoding, -Value) is det.
+%
+%  @arg Value float
+%  @arg Encoding list of 1's and 0's with MSB on the left
+
+gene_to_value([Sign_Bit|Bits], Value) :-
+   writeln(bits(Bits)),
+   bits_to_int(Bits, 0, I),
+   writeln(i(I)),
+   gene_value_range(Range),
+   gene_width(Width),
+   sign(Sign_Bit, Sign),
+   Value is Sign * Range * I/(1<<Width).
+
+
+%! sign(+Sign_Bit, -Sign) is det.
+
+sign(1, -1).
+sign(0, 1).
+
+
+%! bits_to_int(+Encoding, +Accum, -I) is det.
+
+bits_to_int([], Accum, Accum).
+bits_to_int([H|T], Accum, I) :-
+   Accum_1 is Accum * 2 + H,
+   writeln(x(Accum_1)),
+   bits_to_int(T, Accum_1, I).
 
