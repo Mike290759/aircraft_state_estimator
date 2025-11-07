@@ -287,39 +287,46 @@ galg(Fitness_Pred, Genes, Better_Genes, Fitness) :-
 
 %! value_to_gene(+Value, -Bits) is det.
 %
-%  A two's complement representation is used.
+%  A two's complement representation is used to represent all numbers
+%  positive and negative.
 %
 %  Positive numbers:
-%    The binary representation is the same as its unsigned counterpart.
+%    The MSB is 0
+%    The biggest value in 16-bits is 0111_1111_1111_1111 = 32,767
 %
 %  Negative numbers:
-%    The two's complement is found by taking the
-%    positive version, inverting all its bits, and then adding 1
-%    ignoring any overflow
+%    With the two's complement representation the MSB is
+%    treated as -(2^Width-1) and the bits to the right are added to give
+%    a negative number. For example in a 16 bit system:
+%
+%    1000_0000_0000_0000 is -2^15 = -32768 (the biggest negative value)
+%    1000_0000_0000_0010 is -2^15 + 2 = -32766
+%    1111_1111_1111_1111 is -2^15 + 2^15 - 1 = -1
 %
 %  Example with 16 bits and range of -100.0..100.0:
-%    -100.0 --> ???
-%       0.0 -->
-%    +100.0 -->
+%    -100.0 --> [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+%       0.0 --> [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
+%    +100.0 --> [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
 %
 %  @arg Value float @arg Bits list of 1's and 0's [Sign_Bit, MSB, ... LSB]
 
-value_to_gene(Value, Bits) :-
+value_to_gene(Value, [Sign_Bit|Bits]) :-
    gene_width(Width),
    gene_value_range(Range),
    assertion((-Range =< Value, Value =< Range)),
-   Abs_Value is abs(Value),
-   format('Abs_Value=~f~n', [Abs_Value]),
-   I0 is integer((1<<(Width-1)-1) * Abs_Value/Range),
-   format('I0=~2r~n', [I0]),
-   (   Value < 0
-   ->  I1 is I0 + 1,
-       I is I1 /\ ((1<<Width)-1)   % One's complement plus 1, ignore overflow
+   NV is Value/Range,
+   (   NV < 0
+   ->  I is 1<<(Width-1) + integer(1<<(Width-1) * NV) + 1,
+       Sign_Bit = 1
 
-   ;   I = I0
+   ;   NV =:= 0
+   ->  I = 0,
+       Sign_Bit = 0
+
+   ;   I = integer(1<<(Width-1) * NV) - 1,
+       Sign_Bit = 0
    ),
-   format('I=~2r [~d]~n', [I,I]),
-   int_to_bits(I, Width, Bits).
+   int_to_bits(I, Width-1, Bits).
 
 
 %! int_to_bits(+I, +K, -Encoding) is det.
@@ -342,19 +349,14 @@ gene_value_range(100.0).  % Range is -100.0 .. 100.0
 %  @arg Encoding list of 1's and 0's with MSB on the left
 
 gene_to_value([Sign_Bit|Bits], Value) :-
-   writeln(bits(Bits)),
    bits_to_int(Bits, 0, I),
-   writeln(i(I)),
    gene_value_range(Range),
    gene_width(Width),
-   sign(Sign_Bit, Sign),
-   Value is Sign * Range * I/(1<<Width).
-
-
-%! sign(+Sign_Bit, -Sign) is det.
-
-sign(1, -1).
-sign(0, 1).
+   (   Sign_Bit == 1
+   ->  Neg_Offset is -(1<<(Width-1))
+   ;   Neg_Offset = 0
+   ),
+   Value is Range * (Neg_Offset + I)/(1<<(Width-1)).
 
 
 %! bits_to_int(+Encoding, +Accum, -I) is det.
@@ -362,6 +364,5 @@ sign(0, 1).
 bits_to_int([], Accum, Accum).
 bits_to_int([H|T], Accum, I) :-
    Accum_1 is Accum * 2 + H,
-   writeln(x(Accum_1)),
    bits_to_int(T, Accum_1, I).
 
