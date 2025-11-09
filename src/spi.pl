@@ -53,6 +53,7 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
    sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, -),
    galg(2, +, -, -).
 
+%:- set_prolog_flag(optimise, true).
 
 %!  ts is semidet.
 
@@ -285,7 +286,7 @@ galg(Fitness_Pred, Genes, Better_Genes, Fitness) :-
    Better_Genes = Genes.
 
 
-%! value_to_gene(+Value, -Bits) is det.
+%! value_to_gene(+Value, +Width, +Range, -Bits) is det.
 %
 %  A two's complement representation is used to represent all numbers
 %  positive and negative.
@@ -308,15 +309,16 @@ galg(Fitness_Pred, Genes, Better_Genes, Fitness) :-
 %       0.0 --> [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
 %    +100.0 --> [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
 %
-%  @arg Value float @arg Bits list of 1's and 0's [Sign_Bit, MSB, ... LSB]
+%  @arg Value float
+%  @arg Width integer number of bits in the gene
+%  @arg Range float the max/min limit of Value
+%  @arg Bits list of 1's and 0's [Sign_Bit, MSB, ... LSB]
 
-value_to_gene(Value, [Sign_Bit|Bits]) :-
-   gene_width(Width),
-   gene_value_range(Range),
+value_to_gene(Value, Width, Range, [Sign_Bit|Bits]) :-
    assertion((-Range =< Value, Value =< Range)),
    NV is Value/Range,
    (   NV < 0
-   ->  I is 1<<(Width-1) + integer(1<<(Width-1) * NV) + 1,
+   ->  I is 1<<(Width-1) + integer(1<<(Width-1) * NV),
        Sign_Bit = 1
 
    ;   NV =:= 0
@@ -339,19 +341,17 @@ int_to_bits(I, K, [Bit|T]) :-
    int_to_bits(I, KK, T).
 
 
-gene_width(16).
-gene_value_range(100.0).  % Range is -100.0 .. 100.0
 
-
-%! gene_to_value(+Encoding, -Value) is det.
+%! gene_to_value(+Encoding, +Range, -Value) is det.
+%
+%  Inverse of value_to_gene/4
 %
 %  @arg Value float
-%  @arg Encoding list of 1's and 0's with MSB on the left
+%  @arg Bits list of 1's and 0's [Sign_Bit, MSB, ... LSB]
 
-gene_to_value([Sign_Bit|Bits], Value) :-
+gene_to_value([Sign_Bit|Bits], Range, Value) :-
+   length([Sign_Bit|Bits], Width),
    bits_to_int(Bits, 0, I),
-   gene_value_range(Range),
-   gene_width(Width),
    (   Sign_Bit == 1
    ->  Neg_Offset is -(1<<(Width-1))
    ;   Neg_Offset = 0
@@ -365,4 +365,52 @@ bits_to_int([], Accum, Accum).
 bits_to_int([H|T], Accum, I) :-
    Accum_1 is Accum * 2 + H,
    bits_to_int(T, Accum_1, I).
+
+
+:- begin_tests(spi).
+
+test(1) :-
+   value_to_gene(-100.0, 16, 100.0, L),
+   L == [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0].
+
+test(2) :-
+   value_to_gene(0.0, 16, 100.0, L),
+   L == [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0].
+
+test(3) :-
+   value_to_gene(100.0, 16, 100.0, L),
+   L == [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1].
+
+test(4) :-
+   gene_to_value([1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], 100.0, -100.0).
+
+test(5) :-
+   gene_to_value([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], 100.0, 0.0).
+
+test(6) :-
+   L = [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+   Range = 100.0,
+   length(L, Width),
+   gene_to_value(L, 100.0, V),
+   close_enough(100.0, V, Width, Range).
+
+test(7) :-
+   Range = 100.0,
+   Width = 16,
+   V1 = -73.4,
+   value_to_gene(V1, Width, Range, L),
+   gene_to_value(L, Range, V2),
+   close_enough(V1, V2, Width, Range).
+
+
+%! close_enough(+V1, +V2, +Width, +Range) is semidet.
+
+close_enough(V1, V2, Width, Range) :-
+   Quantum is Range/(1<<(Width-1)),
+   abs(V1-V2) =< Quantum.
+
+:- end_tests(spi).
+
+
+
 
