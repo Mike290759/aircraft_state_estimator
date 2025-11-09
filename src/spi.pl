@@ -321,11 +321,7 @@ value_to_gene(Value, Width, Range, [Sign_Bit|Bits]) :-
    ->  I is 1<<(Width-1) + integer(1<<(Width-1) * NV),
        Sign_Bit = 1
 
-   ;   NV =:= 0
-   ->  I = 0,
-       Sign_Bit = 0
-
-   ;   I = integer(1<<(Width-1) * NV) - 1,
+   ;   I is integer((1<<(Width-1)-1) * NV),
        Sign_Bit = 0
    ),
    int_to_bits(I, Width-1, Bits).
@@ -397,10 +393,13 @@ test(6) :-
 test(7) :-
    Range = 100.0,
    Width = 16,
-   V1 = -73.4,
-   value_to_gene(V1, Width, Range, L),
-   gene_to_value(L, Range, V2),
-   close_enough(V1, V2, Width, Range).
+   forall((   member(V, [93.41, 87.12, 70.73, 62.84, 58.25, 43.16, 35.57, 26.98, 19.49, 5.91]),
+              member(Sign, [-1, +1]),
+              V1 is V * Sign),
+          (   value_to_gene(V1, Width, Range, L),
+              writeln([V1, L]),
+              gene_to_value(L, Range, V2),
+              close_enough(V1, V2, Width, Range))).
 
 
 %! close_enough(+V1, +V2, +Width, +Range) is semidet.
