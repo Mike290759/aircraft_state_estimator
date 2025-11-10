@@ -34,6 +34,7 @@ SOFTWARE.
 :- use_module(library(pce), [new/2, send/2, get/3]).
 :- use_module(library(debug), [assertion/1]).
 :- use_module(library(clpfd)).
+:- use_module(library(random), [random_between/3, random_select/3, maybe/1]).
 
 /** <module> System Parameter Identification
 
@@ -51,7 +52,7 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 :- meta_predicate
    sodt(2, +, +, +, +, +, +, +, +, -),
    sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, -),
-   galg(2, +, -, -).
+   galg(2, -).
 
 %:- set_prolog_flag(optimise, true).
 
@@ -284,46 +285,45 @@ fitness_1([p(_, V1)|T1], [p(_, V2)|T2], F0, F) :-
 
 galg(Fitness_Pred, Fittest_Gene) :-
    galg_config(C),
-   galg_config(C),
    Chromosome_Length is C.number_of_parameters * C.parameter_bit_width,
-   initial_population(C.population_size, Fitness_Pred, Chromosome_Length, Initial_Population),
-   galg_1(0, C.max_generations, Fitness_Pred, Initial_Population, Final_Population),
+   initial_population(C.population_size, Chromosome_Length, Initial_Population),
+   galg_1(0, C.max_generations, C.mutation_rate, C.parameter_bit_width, Fitness_Pred, Initial_Population, Final_Population),
    fittest(Final_Population, Fittest_Gene).
 
 
-%! galg_1(+Generation, +Max_Generations, +Fitness_Pred,
+%! galg_1(+Generation, +Max_Generations, +Mutation_Rate, +Fitness_Pred,
 %!        +Population_In, -Population_Out) is det.
 %
 %  A Population is a list of terms individual(Fitness, Chromosome) where
 %  Chromosome is a list of bits being a concatenation of fixed width
 %  lists of bits (genes).
 
-:- det(galg_1/6).
+:- det(galg_1/7).
 
-galg_1(Generation, Max_Generations, _, Population, Population) :-
+galg_1(Generation, Max_Generations, _, _, _, Population, Population) :-
    Generation >= Max_Generations,
    !.
-galg_1(G, Max_Generations, Fitness_Pred, P0, Population_Out) :-
+galg_1(G, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Fitness_Pred, P0, Population_Out) :-
+   update_fitness(P0, Fitness_Pred, Parameter_Bit_Width, P1),
    reproduce(P0, P1),
-   swap_genes(P1, P2),
-   mutate(P2, P3),
+   phrase(swap_genes(P1), P2),
+   mutate(P2, Mutation_Rate, P3),
    !,  % Green cut
    GG is G + 1,
-   galg_1(GG, Max_Generations, Fitness_Pred, P3, Population_Out).
+   galg_1(GG, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Fitness_Pred, P3, Population_Out).
 
 
 %!  initial_population(+Population_Size, +Fitness_Pred, -Population) is
 %!                     det.
 
-:- det(initial_population/4).
+:- det(initial_population/3).
 
-initial_population(0, _, _, []) :-
+initial_population(0, _, []) :-
    !.
-initial_population(N, Fitness_Pred, Chromosome_Length, [individual(Fitness, Chromosome)|P]) :-
+initial_population(N, Chromosome_Length, [individual(_, Chromosome)|P]) :-
    initial_chromosome(Chromosome_Length, Chromosome),
-   evaluate_fitness(Chromosome, Fitness_Pred, Fitness),
    NN is N - 1,
-   initial_population(NN, Fitness_Pred, P).
+   initial_population(NN, Chromosome_Length, P).
 
 
 %!  initial_chromosome(+N, -Chromosome) is det.
@@ -338,15 +338,14 @@ initial_chromosome(N, [Bit|Bits]) :-
    initial_chromosome(NN, Bits).
 
 
+%! update_fitness(+Population, +Fitness_Pred, +Parameter_Bit_Width,
+%!                -Updated_Population) is det.
 
-%! evaluate_fitness(+Chromosome, +Fitness_Pred, -Fitness) is det.
-
-:- det(evaluate_fitness/3).
-
-evaluate_fitness(Chromosome, Fitness_Pred, Fitness) :-
-   galg_config(C),
-   chromosome_genes(Chromosome, C.parameter_bit_width, Genes),
-   call(Fitness_Pred, Genes, Fitness).
+update_fitness([], _, _, []).
+update_fitness([individual(_, Chromosome)|P1],  Fitness_Pred, Parameter_Bit_Width, [individual(Fitness, Chromosome)|P2]) :-
+   chromosome_genes(Chromosome, Parameter_Bit_Width, Genes),
+   call(Fitness_Pred, Genes, Fitness),
+   update_fitness(P1, Fitness_Pred, Parameter_Bit_Width, P2).
 
 
 %!  chromosome_genes(+Chromosome, +Width, -Genes) is det.
@@ -437,9 +436,30 @@ swap_genes(P0) -->
    swap_genes(P2).
 
 
+%! mutate(+Population, +Mutation_Rate, -New_Population) is det.
+
+mutate([], _, []).
+mutate([individual(_, C1)|P1], Mutation_Rate, [individual(_, C2)|P2]) :-
+   mutate_1(C1, Mutation_Rate, C2),
+   mutate(P1, Mutation_Rate, P2).
 
 
-test_pop([individual(70, a), individual(40, a), individual(30, a), individual(8, a), individual(7, a), individual(6, a), individual(5, a), individual(4, a), individual(3, a), individual(2, a)]).
+%! mutate_1(+Chromosome, +Mutation_Rate, -New_Chromosome) is det.
+
+mutate_1([], _, []).
+mutate_1([B|T1], Mutation_Rate, [Not_B|T2]) :-
+   maybe(Mutation_Rate),
+   !,
+   flip_bit(B, Not_B),
+   mutate_1(T1, Mutation_Rate, T2).
+mutate_1([B|T1], Mutation_Rate, [B|T2]) :-
+   mutate_1(T1, Mutation_Rate, T2).
+
+
+%! flip_bit(+Bit_In, -Bit_Out) is det.
+
+flip_bit(0, 1).
+flip_bit(1, 0).
 
 
 %! galg_config(-Dict) is det.
@@ -448,7 +468,8 @@ galg_config(galg_config{number_of_parameters: 5,
                         parameter_bit_width: 16,
                         population_size: 10,
                         retention: 10,
-                        max_generations: 100}).
+                        max_generations: 100,
+                        mutation_rate: 0.001}).
 
 %! value_to_gene(+Value, +Width, +Range, -Bits) is det.
 %
