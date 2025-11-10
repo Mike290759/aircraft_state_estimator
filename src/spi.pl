@@ -60,13 +60,12 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, Sample_Time, Step_Size, Measured_Open_Loop_Step_Response),
-   Initial_Genes = [0.5, 0.5, 0.5, 0.5, 0.5],
-   galg(fitness(Measured_Open_Loop_Step_Response, Sample_Time, Step_Size, Modelled_Open_Loop_Step_Response), Initial_Genes, Better_Genes, _Fitness),
+   galg(fitness(Measured_Open_Loop_Step_Response, Sample_Time, Step_Size, Modelled_Open_Loop_Step_Response), Fittest_Gene),
    append(Modelled_Open_Loop_Step_Response, Measured_Open_Loop_Step_Response, All_Points),
    y_values(All_Points, Y_Values),
    min_member(Min, Y_Values),
    max_member(Max, Y_Values),
-   format(string(Title), 'sodt - ~w', [Better_Genes]),
+   format(string(Title), 'sodt - ~w', [Fittest_Gene]),
    new(W, auto_sized_picture(Title)),
    send(W, max_size, size(2000, 600)),
    send(W, display, new(Plotter, plotter)),
@@ -141,15 +140,15 @@ measured_open_loop_step_response(File_Name, Duration, Sample_Time, Step_Size, St
 %!  read_step_response(+In:stream, -Sample_Time, -Step_Size, -Step_Response) is det.
 
 read_step_response(In, Sample_Time, Step_Size, Step_Response) :-
-   read_term(In, Sample_Time_Term, []),   % Must be the first term in file
-   (   Sample_Time_Term = sample_time(Sample_Time)
-   ->  true
-   ;   throw(sample_time_expected)
-   ),
    read_term(In, Step_Size_Term, []),   % Must be the second term in file
    (   Step_Size_Term = step_size(Step_Size)
    ->  true
    ;   throw(step_size_expected)
+   ),
+   read_term(In, Sample_Time_Term, []),   % Must be the first term in file
+   (   Sample_Time_Term = sample_time(Sample_Time)
+   ->  true
+   ;   throw(sample_time_expected)
    ),
    findall(p(T, V),
            point(In, T, V),
@@ -279,12 +278,177 @@ fitness_1([p(_, V1)|T1], [p(_, V2)|T2], F0, F) :-
 
 
 
-%!  galg(+Fitness_Pred, +Initial_Genes, -Better_Genes, -Fitness) is det.
+%!  galg(+Fitness_Pred, -Fittest_Gene) is det.
 
-galg(Fitness_Pred, Genes, Better_Genes, Fitness) :-
-   call(Fitness_Pred, Genes, Fitness),
-   Better_Genes = Genes.
+:- det(galg/2).
 
+galg(Fitness_Pred, Fittest_Gene) :-
+   galg_config(C),
+   galg_config(C),
+   Chromosome_Length is C.number_of_parameters * C.parameter_bit_width,
+   initial_population(C.population_size, Fitness_Pred, Chromosome_Length, Initial_Population),
+   galg_1(0, C.max_generations, Fitness_Pred, Initial_Population, Final_Population),
+   fittest(Final_Population, Fittest_Gene).
+
+
+%! galg_1(+Generation, +Max_Generations, +Fitness_Pred,
+%!        +Population_In, -Population_Out) is det.
+%
+%  A Population is a list of terms individual(Fitness, Chromosome) where
+%  Chromosome is a list of bits being a concatenation of fixed width
+%  lists of bits (genes).
+
+:- det(galg_1/6).
+
+galg_1(Generation, Max_Generations, _, Population, Population) :-
+   Generation >= Max_Generations,
+   !.
+galg_1(G, Max_Generations, Fitness_Pred, P0, Population_Out) :-
+   reproduce(P0, P1),
+   swap_genes(P1, P2),
+   mutate(P2, P3),
+   !,  % Green cut
+   GG is G + 1,
+   galg_1(GG, Max_Generations, Fitness_Pred, P3, Population_Out).
+
+
+%!  initial_population(+Population_Size, +Fitness_Pred, -Population) is
+%!                     det.
+
+:- det(initial_population/4).
+
+initial_population(0, _, _, []) :-
+   !.
+initial_population(N, Fitness_Pred, Chromosome_Length, [individual(Fitness, Chromosome)|P]) :-
+   initial_chromosome(Chromosome_Length, Chromosome),
+   evaluate_fitness(Chromosome, Fitness_Pred, Fitness),
+   NN is N - 1,
+   initial_population(NN, Fitness_Pred, P).
+
+
+%!  initial_chromosome(+N, -Chromosome) is det.
+
+:- det(initial_chromosome/2).
+
+initial_chromosome(0, []) :-
+   !.
+initial_chromosome(N, [Bit|Bits]) :-
+   random_between(0, 1, Bit),
+   NN is N - 1,
+   initial_chromosome(NN, Bits).
+
+
+
+%! evaluate_fitness(+Chromosome, +Fitness_Pred, -Fitness) is det.
+
+:- det(evaluate_fitness/3).
+
+evaluate_fitness(Chromosome, Fitness_Pred, Fitness) :-
+   galg_config(C),
+   chromosome_genes(Chromosome, C.parameter_bit_width, Genes),
+   call(Fitness_Pred, Genes, Fitness).
+
+
+%!  chromosome_genes(+Chromosome, +Width, -Genes) is det.
+
+:- det(chromosome_genes/3).
+
+chromosome_genes([], _, []) :-
+   !.
+chromosome_genes(Chromosome, Width, [Gene|Genes]) :-
+   length(Gene, Width),
+   append(Gene, Chromosome_Rest, Chromosome),
+   chromosome_genes(Chromosome_Rest, Width, Genes).
+
+
+%! reproduce(+Population, -New_Population) is det.
+%
+%  Reproduce in proportion to fitness
+
+reproduce(P0, P2) :-
+   sort(1, @>=, P0, P1),
+   total_fitness(P1, 0, Total_Fitness),
+   galg_config(C),
+   phrase(reproduce_1(P1, Total_Fitness, 0, C.population_size), P2).
+
+
+%! reproduce_1(+Population, +Total_Fitness, +Population_Count,
+%!             +Population_Size) // is det.
+
+reproduce_1(_, _, N, Population_Size) -->
+   { N >= Population_Size
+   },
+   !,
+   [].
+reproduce_1([individual(Fitness, Chromosome)|T], Total_Fitness, N, Population_Size) -->
+   { Number_Required is integer(Population_Size * Fitness/Total_Fitness),
+     Number_Required > 0,
+     !,
+     NN is N + Number_Required
+   },
+   clones(Number_Required, individual(Fitness, Chromosome)),
+   reproduce_1(T, Total_Fitness, NN, Population_Size).
+reproduce_1([Individual|T], Total_Fitness, N, Population_Size) -->
+   [Individual],
+   { NN is N + 1
+   },
+   reproduce_1(T, Total_Fitness, NN, Population_Size).
+
+
+%! clones(+Number_Required, +Individual) // is det.
+
+clones(0, _) -->
+   !,
+   [].
+clones(N, Individual) -->
+   [Individual],
+   { NN is N - 1
+   },
+   clones(NN, Individual).
+
+
+
+%! total_fitness(+Population, +Accum, -Total_Fitness) is det.
+
+total_fitness([], Accum, Accum).
+total_fitness([individual(F, _)|T], Accum, Fitness) :-
+   New_Accum is Accum + F,
+   total_fitness(T, New_Accum, Fitness).
+
+
+%! swap_genes(+Population) // is det.
+
+swap_genes([]) -->
+   !,
+   [].
+swap_genes(P0) -->
+   { random_select(individual(_, C1), P0, P1),
+     random_select(individual(_, C2), P1, P2),
+     length(C1, Chromosome_Length),
+     random_between(1, Chromosome_Length, I),
+     length(C1_Left, I),
+     length(C2_Left, I),
+     append(C1_Left, C1_Right, C1),
+     append(C1_Left, C2_Right, C3),
+     append(C2_Left, C1_Right, C4),
+     append(C2_Left, C2_Right, C2)
+   },
+   [individual(_, C3), individual(_, C4)],
+   swap_genes(P2).
+
+
+
+
+test_pop([individual(70, a), individual(40, a), individual(30, a), individual(8, a), individual(7, a), individual(6, a), individual(5, a), individual(4, a), individual(3, a), individual(2, a)]).
+
+
+%! galg_config(-Dict) is det.
+
+galg_config(galg_config{number_of_parameters: 5,
+                        parameter_bit_width: 16,
+                        population_size: 10,
+                        retention: 10,
+                        max_generations: 100}).
 
 %! value_to_gene(+Value, +Width, +Range, -Bits) is det.
 %
@@ -313,6 +477,8 @@ galg(Fitness_Pred, Genes, Better_Genes, Fitness) :-
 %  @arg Width integer number of bits in the gene
 %  @arg Range float the max/min limit of Value
 %  @arg Bits list of 1's and 0's [Sign_Bit, MSB, ... LSB]
+
+:- det(value_to_gene/4).
 
 value_to_gene(Value, Width, Range, [Sign_Bit|Bits]) :-
    assertion((-Range =< Value, Value =< Range)),
@@ -344,6 +510,8 @@ int_to_bits(I, K, [Bit|T]) :-
 %
 %  @arg Value float
 %  @arg Bits list of 1's and 0's [Sign_Bit, MSB, ... LSB]
+
+:- det(gene_to_value/3).
 
 gene_to_value([Sign_Bit|Bits], Range, Value) :-
    length([Sign_Bit|Bits], Width),
