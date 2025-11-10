@@ -50,9 +50,10 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 */
 
 :- meta_predicate
-   sodt(2, +, +, +, +, +, +, +, +, -),
-   sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, -),
-   galg(2, -).
+   sodt(2, +, +, +, +, +, +, +, +, +, -),
+   sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, +, -),
+   galg(2, +, -),
+   galg_1(+, +, +, +, +, 2, +, +, -, -).
 
 %:- set_prolog_flag(optimise, true).
 
@@ -61,7 +62,8 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, Sample_Time, Step_Size, Measured_Open_Loop_Step_Response),
-   galg(fitness(Measured_Open_Loop_Step_Response, Sample_Time, Step_Size, Modelled_Open_Loop_Step_Response), Fittest_Gene),
+   galg_progress_graph(1000, Fitness_Plot),
+   galg(fitness(Measured_Open_Loop_Step_Response, Sample_Time, Step_Size, 100.0, Modelled_Open_Loop_Step_Response), Fitness_Plot, Fittest_Gene),
    append(Modelled_Open_Loop_Step_Response, Measured_Open_Loop_Step_Response, All_Points),
    y_values(All_Points, Y_Values),
    min_member(Min, Y_Values),
@@ -204,7 +206,7 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
    y_values(T1, T2).
 
 
-%!  sodt(+X_Pred, +N, +Sampling_Frequency, +B0, +B1, +B2,
+%!  sodt(+X_Pred, +N, +Sample_Time, +Gain, +B0, +B1, +B2,
 %!       +A0, +A1, +A2, -Points) is det.
 %
 %  Applies a second-order linear discrete filter (direct form II transposed).
@@ -221,19 +223,23 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
 %  Reference
 %  https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter.html
 %
+%  @arg Gain the steady state gain
 %  @arg N series length
 %  @arg X_Pred closure foo(..., Time, X)
 %  @arg Y_Series list of p(T, Y)
 
-sodt(X_Pred, N, Sample_Time, B0, B1, B2, A0, A1, A2, Points) :-
+:- det(sodt/11).
+
+sodt(X_Pred, N, Sample_Time, Gain, B0, B1, B2, A0, A1, A2, Points) :-
    assertion(A0 == 1),
    Time_Step = Sample_Time,
    D1 = 0,
    D2 = 0,
-   sodt_1(N, X_Pred, 0, Time_Step, D1, D2, B0, B1, B2, A0, A1, A2, Points).
+   sodt_1(N, X_Pred, 0, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, Points).
 
 
-%!  sodt_1(+K, +X_Pred, +Time, +Time_Step, +D1, +D2, +B0, +B1, +B2, +A0, +A1, +A2, -Points) is det.
+%!  sodt_1(+K, +X_Pred, +Time, +Time_Step, +Gain, +D1, +D2, +B0, +B1,
+%!         +B2, +A0, +A1, +A2, -Points) is det.
 %
 % From Python implementation:
 %
@@ -247,70 +253,84 @@ sodt(X_Pred, N, Sample_Time, B0, B1, B2, A0, A1, A2, Points) :-
 %        d1 = b[1] * x[n] - a[1] * y[n] + d2
 %        d2 = b[2] * x[n] - a[2] * y[n]
 
-sodt_1(0, _, _, _, _, _, _, _, _, _, _, _, []) :-
+:- det(sodt_1/14).
+
+sodt_1(0, _, _, _, _, _, _, _, _, _, _, _, _, []) :-
    !.
-sodt_1(K, X_Pred, T, Time_Step, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, Y)|Points]) :-
-    call(X_Pred, T, X),
-    Y is B0 * X + D1,
-    D1_New is B1 * X - A1 * Y + D2,
-    D2_New is B2 * X - A2 * Y,
-    KK is K-1,
-    T_Next is T + Time_Step,
-    sodt_1(KK, X_Pred, T_Next, Time_Step, D1_New, D2_New, B0, B1, B2, A0, A1, A2, Points).
+sodt_1(K, X_Pred, T, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, Y)|Points]) :-
+   call(X_Pred, T, X),
+   writeln(y(Y)),
+   Y is Gain * B0 * X + D1,
+   D1_New is B1 * X - A1 * Y + D2,
+   D2_New is B2 * X - A2 * Y,
+   KK is K-1,
+   T_Next is T + Time_Step,
+   sodt_1(KK, X_Pred, T_Next, Time_Step, Gain, D1_New, D2_New, B0, B1, B2, A0, A1, A2, Points).
 
 
 %! fitness(+Measured_Open_Loop_Step_Response, +Sample_Time, +Step_Size,
-%!         -Modelled_Open_Loop_Step_Response, +Genes, -Fitness) is det.
+%!         +Gain, -Modelled_Open_Loop_Step_Response, +Genes, -Fitness)
+%!         is det.
+%
+%  The higher the fitness the better
 
-fitness(Measured_Open_Loop_Step_Response, Sample_Time, Step_Size, Modelled_Open_Loop_Step_Response, [B0, B1, B2, A1, A2], Fitness) :-
+:- det(fitness/7).
+
+fitness(Measured_Open_Loop_Step_Response, Sample_Time, Step_Size, Gain, Modelled_Open_Loop_Step_Response, [B0, B1, B2, A1, A2], Fitness) :-
    length(Measured_Open_Loop_Step_Response, N),
-   sodt(step(0.0, Step_Size), N, Sample_Time, B0, B1, B2, 1, A1, A2, Modelled_Open_Loop_Step_Response),
-   fitness_1(Measured_Open_Loop_Step_Response, Modelled_Open_Loop_Step_Response, 0, Fitness).
+   sodt(step(0.0, Step_Size), N, Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_Open_Loop_Step_Response),
+   model_error(Measured_Open_Loop_Step_Response, Modelled_Open_Loop_Step_Response, 0, Model_Error),
+   Fitness is 1 / Model_Error.
 
 
-%! fitness_1(+Measured_Open_Loop_Step_Response,
-%!           +Modelled_Open_Loop_Step_Response, +Fitness_Accum,
-%!           -Fitness) is det.
+%! model_error(+Measured_Open_Loop_Step_Response,
+%!             +Modelled_Open_Loop_Step_Response, +Fitness_Accum,
+%!             -Total_Error) is det.
 
-fitness_1([], [], Fitness, Fitness).
-fitness_1([p(_, V1)|T1], [p(_, V2)|T2], F0, F) :-
-   F1 is F0 + (V1-V2) ** 2,
-   fitness_1(T1, T2, F1, F).
+:- det(model_error/4).
+
+model_error([], [], Error, Error).
+model_error([p(_, V1)|T1], [p(_, V2)|T2], E0, E) :-
+   E1 is E0 + (V1-V2) ** 2,
+   model_error(T1, T2, E1, E).
 
 
 
-%!  galg(+Fitness_Pred, -Fittest_Gene) is det.
+%!  galg(+Fitness_Pred, +GALG_Plot, -Fittest_Genes) is det.
 
-:- det(galg/2).
+:- det(galg/3).
 
-galg(Fitness_Pred, Fittest_Gene) :-
+galg(Fitness_Pred, GALG_Plot, Fittest_Genes) :-
    galg_config(C),
    Chromosome_Length is C.number_of_parameters * C.parameter_bit_width,
    initial_population(C.population_size, Chromosome_Length, Initial_Population),
-   galg_1(0, C.max_generations, C.mutation_rate, C.parameter_bit_width, Fitness_Pred, Initial_Population, Final_Population),
-   fittest(Final_Population, Fittest_Gene).
+   galg_1(0, C.max_generations, C.mutation_rate, C.parameter_bit_width, C.range, Fitness_Pred, GALG_Plot, Initial_Population, _, Fittest_Genes).
 
 
-%! galg_1(+Generation, +Max_Generations, +Mutation_Rate, +Fitness_Pred,
-%!        +Population_In, -Population_Out) is det.
+%! galg_1(+Generation, +Max_Generations, +Mutation_Rate,
+%!        +Parameter_Bit_Width, +Range, +Fitness_Pred, +GALG_Plot,
+%!        +Population_In, -Population_Out, -Fittest_Genes) is det.
 %
-%  A Population is a list of terms individual(Fitness, Chromosome) where
-%  Chromosome is a list of bits being a concatenation of fixed width
-%  lists of bits (genes).
+%  A Population is a list of individual(Fitness, Chromosome) terms where
+%  Chromosome is a list of bits which in turn are a concatenation of
+%  fixed width lists of bits (coded genes).
 
-:- det(galg_1/7).
+:- det(galg_1/10).
 
-galg_1(Generation, Max_Generations, _, _, _, Population, Population) :-
+galg_1(Generation, Max_Generations, _, Parameter_Bit_Width, Range, _, _, P0, P1, Fittest_Genes) :-
    Generation >= Max_Generations,
-   !.
-galg_1(G, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Fitness_Pred, P0, Population_Out) :-
-   update_fitness(P0, Fitness_Pred, Parameter_Bit_Width, P1),
+   !,
+   sort(1, @>=, P0, [individual(_, Fittest_Chromosome)|_]),
+   P1 = P0,
+   chromosome_gene_values(Fittest_Chromosome, Parameter_Bit_Width, Range, Fittest_Genes).
+galg_1(G, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Range, Fitness_Pred, GALG_Plot, P0, Population_Out, Fittest_Gene) :-
+   update_fitness(P0, Fitness_Pred, Parameter_Bit_Width, Range, P1),
    reproduce(P0, P1),
    phrase(swap_genes(P1), P2),
    mutate(P2, Mutation_Rate, P3),
    !,  % Green cut
    GG is G + 1,
-   galg_1(GG, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Fitness_Pred, P3, Population_Out).
+   galg_1(GG, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Range, Fitness_Pred, GALG_Plot, P3, Population_Out, Fittest_Gene).
 
 
 %!  initial_population(+Population_Size, +Fitness_Pred, -Population) is
@@ -339,30 +359,38 @@ initial_chromosome(N, [Bit|Bits]) :-
 
 
 %! update_fitness(+Population, +Fitness_Pred, +Parameter_Bit_Width,
-%!                -Updated_Population) is det.
+%!                +Range, -Updated_Population) is det.
 
-update_fitness([], _, _, []).
-update_fitness([individual(_, Chromosome)|P1],  Fitness_Pred, Parameter_Bit_Width, [individual(Fitness, Chromosome)|P2]) :-
-   chromosome_genes(Chromosome, Parameter_Bit_Width, Genes),
+:- det(update_fitness/5).
+
+update_fitness([], _, _, _, []).
+update_fitness([individual(_, Chromosome)|P1],  Fitness_Pred, Parameter_Bit_Width, Range, [individual(Fitness, Chromosome)|P2]) :-
+   chromosome_gene_values(Chromosome, Parameter_Bit_Width, Range, Genes),
    call(Fitness_Pred, Genes, Fitness),
-   update_fitness(P1, Fitness_Pred, Parameter_Bit_Width, P2).
+   update_fitness(P1, Fitness_Pred, Parameter_Bit_Width, Range, P2).
 
 
-%!  chromosome_genes(+Chromosome, +Width, -Genes) is det.
+%!  chromosome_gene_values(+Chromosome, +Parameter_Bit_Width, +Range,
+%!                        -Gene_Values) is det.
+%
+%  @arg Gene_Values list of numeric values (the application parameters)
 
-:- det(chromosome_genes/3).
+:- det(chromosome_gene_values/4).
 
-chromosome_genes([], _, []) :-
+chromosome_gene_values([], _, _, []) :-
    !.
-chromosome_genes(Chromosome, Width, [Gene|Genes]) :-
+chromosome_gene_values(Chromosome, Width, Range, [Value|Gene_Values]) :-
    length(Gene, Width),
    append(Gene, Chromosome_Rest, Chromosome),
-   chromosome_genes(Chromosome_Rest, Width, Genes).
+   gene_to_value(Gene, Range, Value),
+   chromosome_gene_values(Chromosome_Rest, Width, Range, Gene_Values).
 
 
 %! reproduce(+Population, -New_Population) is det.
 %
 %  Reproduce in proportion to fitness
+
+:- det(reproduce/2).
 
 reproduce(P0, P2) :-
    sort(1, @>=, P0, P1),
@@ -375,9 +403,9 @@ reproduce(P0, P2) :-
 %!             +Population_Size) // is det.
 
 reproduce_1(_, _, N, Population_Size) -->
-   { N >= Population_Size
+   { N >= Population_Size,
+     !
    },
-   !,
    [].
 reproduce_1([individual(Fitness, Chromosome)|T], Total_Fitness, N, Population_Size) -->
    { Number_Required is integer(Population_Size * Fitness/Total_Fitness),
@@ -416,6 +444,8 @@ total_fitness([individual(F, _)|T], Accum, Fitness) :-
 
 
 %! swap_genes(+Population) // is det.
+
+:- det(swap_genes//1).
 
 swap_genes([]) -->
    !,
@@ -466,6 +496,7 @@ flip_bit(1, 0).
 
 galg_config(galg_config{number_of_parameters: 5,
                         parameter_bit_width: 16,
+                        range: 2.0,
                         population_size: 10,
                         retention: 10,
                         max_generations: 100,
@@ -586,7 +617,6 @@ test(7) :-
               member(Sign, [-1, +1]),
               V1 is V * Sign),
           (   value_to_gene(V1, Width, Range, L),
-              writeln([V1, L]),
               gene_to_value(L, Range, V2),
               close_enough(V1, V2, Width, Range))).
 
@@ -600,5 +630,16 @@ close_enough(V1, V2, Width, Range) :-
 :- end_tests(spi).
 
 
+%! galg_progress_graph(+Y_Scale_Max, -Plot) is det.
+
+galg_progress_graph(Y_Scale_Max, Plot) :-
+    new(W, auto_sized_picture('GALG')),
+    send(W, max_size, size(2000, 600)),
+    send(W, display, new(Plotter, plotter)),
+    send(Plotter, axis, plot_axis(x, 0, 200, @(default), 1500)),
+    send(Plotter, axis, plot_axis(y, 0, Y_Scale_Max, @(default), 400)),
+    send(Plotter, graph, new(Plot, plot_graph)),
+    send(Plot, colour, blue),
+    send(W, open).
 
 
