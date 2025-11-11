@@ -30,11 +30,6 @@ SOFTWARE.
           [
           ]).
 
-:- use_module(library(lists), [min_member/2, max_member/2, member/2, append/3]).
-:- use_module(library(pce), [new/2, send/2, get/3]).
-:- use_module(library(debug), [assertion/1]).
-:- use_module(library(clpfd)).
-:- use_module(library(random), [random_between/3, random_select/3, maybe/1]).
 
 /** <module> System Parameter Identification
 
@@ -49,26 +44,41 @@ depends on the location of the system's poles within the unit circle in the z-pl
 See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 */
 
+:- use_module(library(lists),
+              [min_member/2, max_member/2, member/2, append/3, max_member/3]).
+:- use_module(library(pce), [new/2, send/2, get/3]).
+:- use_module(library(debug), [assertion/1]).
+:- use_module(library(clpfd)).
+:- use_module(library(random), [random_between/3, random_select/3, maybe/1]).
+:- use_module(library(exceptions), [catch/4]).
+
 :- meta_predicate
    sodt(2, +, +, +, +, +, +, +, +, +, -),
    sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, +, -),
    galg(2, +, -),
-   galg_1(+, +, +, +, +, 2, +, +, -, -).
+   galg_1(+, +, +, +, +, 2, +, +, -, -),
+   fitness(+, 2, +, +, +, -).
 
 %:- set_prolog_flag(optimise, true).
+
 
 %!  ts is semidet.
 
 user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
-   measured_open_loop_step_response(dat('step_response.dat'), Duration, Sample_Time, Step_Size, Measured_Open_Loop_Step_Response),
-   galg_progress_graph(1000, Fitness_Plot),
-   galg(fitness(Measured_Open_Loop_Step_Response, Sample_Time, Step_Size, 100.0, Modelled_Open_Loop_Step_Response), Fitness_Plot, Fittest_Gene),
+   measured_open_loop_step_response(dat('step_response.dat'), Duration, Sample_Time, Step_Size, Normalisation_Factor, Measured_Open_Loop_Step_Response),
+   writeln(nf(Normalisation_Factor)),
+   fitness_progress_graph(0.02, Fitness_Plot),
+   Gain = 100.0,
+   galg(fitness(Measured_Open_Loop_Step_Response, step_input(Step_Size), Sample_Time, Gain), Fitness_Plot, Fittest_Genes),
+   Fittest_Genes = [B0, B1, B2, A1, A2],
+   length(Measured_Open_Loop_Step_Response, N),
+   sodt(step_input(Step_Size), N, Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_Open_Loop_Step_Response),
    append(Modelled_Open_Loop_Step_Response, Measured_Open_Loop_Step_Response, All_Points),
    y_values(All_Points, Y_Values),
    min_member(Min, Y_Values),
    max_member(Max, Y_Values),
-   format(string(Title), 'sodt - ~w', [Fittest_Gene]),
+   format(string(Title), 'sodt - ~w', [Fittest_Genes]),
    new(W, auto_sized_picture(Title)),
    send(W, max_size, size(2000, 600)),
    send(W, display, new(Plotter, plotter)),
@@ -111,33 +121,49 @@ legend_1([item(Legend_Text, Colour)|T], Plotter, X, Y, Spacing, Width, Total_Wid
    legend_1(T, Plotter, Next_X, Y, Spacing, New_Width, Total_Width).
 
 
-%! step(+Time_Of_Step, +Step_Size, +Time, -X) is det.
-
-step(Time_Of_Step, Step_Size, T, X) :-
-   (   T =< Time_Of_Step
-   ->  X = 0
-   ;   X = Step_Size
-   ).
-
-
 %! measured_open_loop_step_response(+File_Name, +Duration, -Sample_Time,
-%!                                  -Step_Size, -Step_Response) is
-%!                                  det.
+%!                                  -Step_Size,
+%!                                  -Normalised_Step_Response) is det.
 %
 %  Supply the data captured in the PID loop - see capture_open_loop_step_response/3
+%
+%  The date is time-rebased so that the first item occurs at T=0.0 and
+%  the series cut off at T = Duration.
+%
+%  The data is also normalised so that it fits in the range -1.0..1.0
+%  and the normalisation factor is returned.
 %
 %  @arg Duration cutoff time for the number of data points to be returned
 %  @arg Sample_Time the length of time between measurements
 %  @arg Step_Size the size of input step
 %  @arg N the number of data points in the step response series
-%  @arg Step_Response list p(T, V)
+%  @arg Normalisation_Factor multiply by this to convert the normalised values back to the original values
+%  @arg Normalised_Step_Response list p(T, V)
 
-measured_open_loop_step_response(File_Name, Duration, Sample_Time, Step_Size, Step_Response) :-
+measured_open_loop_step_response(File_Name, Duration, Sample_Time, Step_Size, Normalisation_Factor, Normalised_Step_Response) :-
    absolute_file_name(File_Name, Absolute_File_Name),   % Allow for path aliases
    setup_call_cleanup(open(Absolute_File_Name, read, In),
                       read_step_response(In, Sample_Time, Step_Size, L),
                       close(In)),
-   rebase_time_and_trim(L, Duration, Step_Response).
+   rebase_time_and_trim(L, Duration, Step_Response),
+   y_values(Step_Response, Y_Values),
+   max_member(abs_max_order, Normalisation_Factor, Y_Values),
+   normalised(Step_Response, Normalisation_Factor, Normalised_Step_Response).
+
+
+%!  abs_max_order(+A, +B) is semidet.
+
+abs_max_order(A, B) :-
+   abs(A) =< abs(B).
+
+
+%! normalised(+P, +Normalisation_Factor, -P_Normalised) is det.
+
+normalised([], _, []).
+normalised([p(T, V1)|P1], Normalisation_Factor, [p(T, V2)|P2]) :-
+   V2 is V1 / Normalisation_Factor,
+   normalised(P1, Normalisation_Factor, P2).
+
 
 
 %!  read_step_response(+In:stream, -Sample_Time, -Step_Size, -Step_Response) is det.
@@ -209,7 +235,9 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
 %!  sodt(+X_Pred, +N, +Sample_Time, +Gain, +B0, +B1, +B2,
 %!       +A0, +A1, +A2, -Points) is det.
 %
-%  Applies a second-order linear discrete filter (direct form II transposed).
+%  Generate a time series of N inputs (X values) by passing T
+%  through X_Pred and pass them through a second-order linear discrete
+%  filter (direct form II transposed).
 %
 %  The general difference equation for a second-order filter is:
 %
@@ -259,7 +287,6 @@ sodt_1(0, _, _, _, _, _, _, _, _, _, _, _, _, []) :-
    !.
 sodt_1(K, X_Pred, T, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, Y)|Points]) :-
    call(X_Pred, T, X),
-   writeln(y(Y)),
    Y is Gain * B0 * X + D1,
    D1_New is B1 * X - A1 * Y + D2,
    D2_New is B2 * X - A2 * Y,
@@ -268,18 +295,20 @@ sodt_1(K, X_Pred, T, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, Y)|P
    sodt_1(KK, X_Pred, T_Next, Time_Step, Gain, D1_New, D2_New, B0, B1, B2, A0, A1, A2, Points).
 
 
-%! fitness(+Measured_Open_Loop_Step_Response, +Sample_Time, +Step_Size,
-%!         +Gain, -Modelled_Open_Loop_Step_Response, +Genes, -Fitness)
-%!         is det.
+%! fitness(+Measured_Open_Loop_Step_Response, +X_Pred, +Sample_Time,
+%!         +Gain, +Gene_Values, -Fitness) is det.
 %
 %  The higher the fitness the better
 
-:- det(fitness/7).
+:- det(fitness/6).
 
-fitness(Measured_Open_Loop_Step_Response, Sample_Time, Step_Size, Gain, Modelled_Open_Loop_Step_Response, [B0, B1, B2, A1, A2], Fitness) :-
+fitness(Measured_Open_Loop_Step_Response, X_Pred, Sample_Time, Gain, [B0, B1, B2, A1, A2], Fitness) :-
    length(Measured_Open_Loop_Step_Response, N),
-   sodt(step(0.0, Step_Size), N, Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_Open_Loop_Step_Response),
-   model_error(Measured_Open_Loop_Step_Response, Modelled_Open_Loop_Step_Response, 0, Model_Error),
+   sodt(X_Pred, N, Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_Open_Loop_Step_Response),
+   catch(model_error(Measured_Open_Loop_Step_Response, Modelled_Open_Loop_Step_Response, 0, Model_Error),
+         evaluation_error,
+         _,
+         Model_Error = inf),
    Fitness is 1 / Model_Error.
 
 
@@ -296,19 +325,19 @@ model_error([p(_, V1)|T1], [p(_, V2)|T2], E0, E) :-
 
 
 
-%!  galg(+Fitness_Pred, +GALG_Plot, -Fittest_Genes) is det.
+%!  galg(+Fitness_Pred, +Fitness_Plot, -Fittest_Genes) is det.
 
 :- det(galg/3).
 
-galg(Fitness_Pred, GALG_Plot, Fittest_Genes) :-
+galg(Fitness_Pred, Fitness_Plot, Fittest_Genes) :-
    galg_config(C),
    Chromosome_Length is C.number_of_parameters * C.parameter_bit_width,
    initial_population(C.population_size, Chromosome_Length, Initial_Population),
-   galg_1(0, C.max_generations, C.mutation_rate, C.parameter_bit_width, C.range, Fitness_Pred, GALG_Plot, Initial_Population, _, Fittest_Genes).
+   galg_1(0, C.max_generations, C.mutation_rate, C.parameter_bit_width, C.range, Fitness_Pred, Fitness_Plot, Initial_Population, _, Fittest_Genes).
 
 
 %! galg_1(+Generation, +Max_Generations, +Mutation_Rate,
-%!        +Parameter_Bit_Width, +Range, +Fitness_Pred, +GALG_Plot,
+%!        +Parameter_Bit_Width, +Range, +Fitness_Pred, +Fitness_Plot,
 %!        +Population_In, -Population_Out, -Fittest_Genes) is det.
 %
 %  A Population is a list of individual(Fitness, Chromosome) terms where
@@ -323,14 +352,22 @@ galg_1(Generation, Max_Generations, _, Parameter_Bit_Width, Range, _, _, P0, P1,
    sort(1, @>=, P0, [individual(_, Fittest_Chromosome)|_]),
    P1 = P0,
    chromosome_gene_values(Fittest_Chromosome, Parameter_Bit_Width, Range, Fittest_Genes).
-galg_1(G, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Range, Fitness_Pred, GALG_Plot, P0, Population_Out, Fittest_Gene) :-
-   update_fitness(P0, Fitness_Pred, Parameter_Bit_Width, Range, P1),
-   reproduce(P0, P1),
-   phrase(swap_genes(P1), P2),
-   mutate(P2, Mutation_Rate, P3),
+galg_1(G, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Range, Fitness_Pred, Fitness_Plot, P0, Population_Out, Fittest_Gene) :-
+   update_fitness(P0, Fitness_Pred, Fitness_Plot, Parameter_Bit_Width, Range, P1),
+   max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P1),
+   in_pce_thread(send(Fitness_Plot, append, G, Best_Fitness_Of_Generation)),
+   reproduce(P1, P2),
+   phrase(swap_genes(P2), P3),
+   mutate(P3, Mutation_Rate, P4),
    !,  % Green cut
    GG is G + 1,
-   galg_1(GG, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Range, Fitness_Pred, GALG_Plot, P3, Population_Out, Fittest_Gene).
+   galg_1(GG, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Range, Fitness_Pred, Fitness_Plot, P4, Population_Out, Fittest_Gene).
+
+
+%! fitness_order(+A, +B) is semidet.
+
+fitness_order(individual(F1, _), individual(F2, _)) :-
+   F1 =< F2.
 
 
 %!  initial_population(+Population_Size, +Fitness_Pred, -Population) is
@@ -358,16 +395,17 @@ initial_chromosome(N, [Bit|Bits]) :-
    initial_chromosome(NN, Bits).
 
 
-%! update_fitness(+Population, +Fitness_Pred, +Parameter_Bit_Width,
-%!                +Range, -Updated_Population) is det.
+%! update_fitness(+Population, +Fitness_Pred,
+%!                +Fitness_Plot, +Parameter_Bit_Width, +Range,
+%!                -Updated_Population) is det.
 
-:- det(update_fitness/5).
+:- det(update_fitness/6).
 
-update_fitness([], _, _, _, []).
-update_fitness([individual(_, Chromosome)|P1],  Fitness_Pred, Parameter_Bit_Width, Range, [individual(Fitness, Chromosome)|P2]) :-
-   chromosome_gene_values(Chromosome, Parameter_Bit_Width, Range, Genes),
-   call(Fitness_Pred, Genes, Fitness),
-   update_fitness(P1, Fitness_Pred, Parameter_Bit_Width, Range, P2).
+update_fitness([], _, _, _, _, []).
+update_fitness([individual(_, Chromosome)|P1],  Fitness_Pred, Fitness_Plot, Parameter_Bit_Width, Range, [individual(Fitness, Chromosome)|P2]) :-
+   chromosome_gene_values(Chromosome, Parameter_Bit_Width, Range, Gene_Values),
+   call(Fitness_Pred, Gene_Values, Fitness),
+   update_fitness(P1, Fitness_Pred, Fitness_Plot, Parameter_Bit_Width, Range, P2).
 
 
 %!  chromosome_gene_values(+Chromosome, +Parameter_Bit_Width, +Range,
@@ -454,13 +492,13 @@ swap_genes(P0) -->
    { random_select(individual(_, C1), P0, P1),
      random_select(individual(_, C2), P1, P2),
      length(C1, Chromosome_Length),
-     random_between(1, Chromosome_Length, I),
+     random_between(0, Chromosome_Length, I),
      length(C1_Left, I),
      length(C2_Left, I),
-     append(C1_Left, C1_Right, C1),
-     append(C1_Left, C2_Right, C3),
-     append(C2_Left, C1_Right, C4),
-     append(C2_Left, C2_Right, C2)
+     append(C1_Left, C1_Right, C1),  % Determines C1_Left, C1_Right
+     append(C2_Left, C2_Right, C2),  % Determines C2_Left, C2_Right
+     append(C1_Left, C2_Right, C3),  % Determines C2
+     append(C2_Left, C1_Right, C4)   % Determines C4
    },
    [individual(_, C3), individual(_, C4)],
    swap_genes(P2).
@@ -492,15 +530,22 @@ flip_bit(0, 1).
 flip_bit(1, 0).
 
 
+%! step_input(+Step_Size, -X) is det.
+%
+%  Generate the step input for all time >= T=0
+
+step_input(Step_Size, _, Step_Size).
+
+
 %! galg_config(-Dict) is det.
 
 galg_config(galg_config{number_of_parameters: 5,
                         parameter_bit_width: 16,
-                        range: 2.0,
+                        range: 1.4,
                         population_size: 10,
-                        retention: 10,
                         max_generations: 100,
                         mutation_rate: 0.001}).
+
 
 %! value_to_gene(+Value, +Width, +Range, -Bits) is det.
 %
@@ -630,13 +675,14 @@ close_enough(V1, V2, Width, Range) :-
 :- end_tests(spi).
 
 
-%! galg_progress_graph(+Y_Scale_Max, -Plot) is det.
+%! fitness_progress_graph(+Y_Scale_Max, -Plot) is det.
 
-galg_progress_graph(Y_Scale_Max, Plot) :-
+fitness_progress_graph(Y_Scale_Max, Plot) :-
     new(W, auto_sized_picture('GALG')),
     send(W, max_size, size(2000, 600)),
     send(W, display, new(Plotter, plotter)),
-    send(Plotter, axis, plot_axis(x, 0, 200, @(default), 1500)),
+    galg_config(C),
+    send(Plotter, axis, plot_axis(x, 0, C.max_generations, @(default), 1500)),
     send(Plotter, axis, plot_axis(y, 0, Y_Scale_Max, @(default), 400)),
     send(Plotter, graph, new(Plot, plot_graph)),
     send(Plot, colour, blue),
