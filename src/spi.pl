@@ -47,12 +47,19 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 */
 
 :- use_module(library(lists),
-              [min_member/2, max_member/2, member/2, append/3, max_member/3]).
-:- use_module(library(pce), [new/2, send/2, get/3]).
+              [ min_member/2,
+                max_member/2,
+                member/2,
+                append/3,
+                max_member/3,
+                nextto/3
+              ]).
+:- use_module(library(pce), [new/2, send/2, get/3, in_pce_thread/1]).
 :- use_module(library(debug), [assertion/1]).
 :- use_module(library(clpfd)).
 :- use_module(library(random), [random_between/3, random_select/3, maybe/1]).
 :- use_module(library(exceptions), [catch/4]).
+:- use_module(library(rbtrees), [list_to_rbtree/2]).
 
 :- meta_predicate
    sodt(2, +, +, +, +, +, +, +, +, +, -),
@@ -76,14 +83,15 @@ galg_config(galg_config{parameter_bit_width: 16,
 
 user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
-   measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_Open_Loop_Step_Response),
+   measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(6000, Fitness_Plot),
-   Gene_Map = [gene(sample_time, 0, 1.0), gene(gain, 0, 100), gene(b0, -2.0, 2.0), gene(b1, -2.0, 2.0), gene(b2, -2.0, 2.0), gene(a1, -2.0, 2.0), gene(a2, -2.0, 2.0)],
-   galg(fitness(Measured_Open_Loop_Step_Response, step_input(Step_Size), Duration), Gene_Map, Fitness_Plot, Fittest_Genes),
+   Gene_Map = [gene(sample_time, 0, 1.0), gene(gain, 1, 100), gene(b0, -2.0, 2.0), gene(b1, -2.0, 2.0), gene(b2, -2.0, 2.0), gene(a1, -2.0, 2.0), gene(a2, -2.0, 2.0)],
+   points_to_rb_tree(Measured_OLSR, Measured_OLSR_Segments),
+   galg(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration), Gene_Map, Fitness_Plot, Fittest_Genes),
    Fittest_Genes = [Model_Sample_Time, Gain, B0, B1, B2, A1, A2],
    N is integer(Duration/Model_Sample_Time),
-   sodt(step_input(Step_Size), N, Model_Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_Open_Loop_Step_Response),
-   append(Modelled_Open_Loop_Step_Response, Measured_Open_Loop_Step_Response, All_Points),
+   sodt(step_input(Step_Size), N, Model_Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
+   append(Modelled_OLSR, Measured_OLSR, All_Points),
    y_values(All_Points, Y_Values),
    min_member(Min, Y_Values),
    max_member(Max, Y_Values),
@@ -99,8 +107,8 @@ user:ts :-
    send(Black_Plot, colour, black),
    legend([item('Measured Open Loop Step Response', black), item('Modelled Open Loop Step Response', blue)], Plotter, 30, 80),
    send(W, open),
-   forall(member(p(T, Y), Modelled_Open_Loop_Step_Response), send(Blue_Plot, append, T, Y)),
-   forall(member(p(T, M), Measured_Open_Loop_Step_Response), send(Black_Plot, append, T, M)),
+   forall(member(p(T, V), Modelled_OLSR), send(Blue_Plot, append, T, V)),
+   forall(member(p(T, V), Measured_OLSR), send(Black_Plot, append, T, V)),
    fail.
 
 
@@ -132,7 +140,8 @@ legend_1([item(Legend_Text, Colour)|T], Plotter, X, Y, Spacing, Width, Total_Wid
 
 %! measured_open_loop_step_response(+File_Name, +Duration, -Sample_Time,
 %!                                  -Step_Size,
-%!                                  -Normalised_Step_Response) is det.
+%!                                  -Normalised_Step_Response) is
+%!                                  det.
 %
 %  Supply the data captured in the PID loop - see capture_open_loop_step_response/3
 %
@@ -147,7 +156,7 @@ legend_1([item(Legend_Text, Colour)|T], Plotter, X, Y, Spacing, Width, Total_Wid
 %  @arg Step_Size the size of input step
 %  @arg N the number of data points in the step response series
 %  @arg Normalisation_Factor multiply by this to convert the normalised values back to the original values
-%  @arg Normalised_Step_Response list p(T, V)
+%  @arg Normalised_Step_Response list of p(T, V)
 
 measured_open_loop_step_response(File_Name, Duration, Sample_Time, Step_Size, Normalisation_Factor, Normalised_Step_Response) :-
    absolute_file_name(File_Name, Absolute_File_Name),   % Allow for path aliases
@@ -169,10 +178,9 @@ abs_max_order(A, B) :-
 %! normalised(+P, +Normalisation_Factor, -P_Normalised) is det.
 
 normalised([], _, []).
-normalised([p(T, V1)|P1], Normalisation_Factor, [p(T, V2)|P2]) :-
+normalised([p(T, V1)|P1], Normalisation_Factor, [T-V2|P2]) :-
    V2 is V1 / Normalisation_Factor,
    normalised(P1, Normalisation_Factor, P2).
-
 
 
 %!  read_step_response(+In:stream, -Sample_Time, -Step_Size, -Step_Response) is det.
@@ -263,17 +271,17 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
 %  @arg Gain the steady state gain
 %  @arg N series length
 %  @arg X_Pred closure foo(..., Time, X)
-%  @arg Y_Series list of p(T, Y)
-
+%  @arg Points RB-tree where key = T
+%
 :- det(sodt/11).
 
-sodt(X_Pred, Duration, Sample_Time, Gain, B0, B1, B2, A0, A1, A2, Points) :-
+sodt(X_Pred, Duration, Sample_Time, Gain, B0, B1, B2, A0, A1, A2, P) :-
    assertion(A0 == 1),
    Time_Step = Sample_Time,
    N is integer(Duration/Sample_Time),
    D1 = 0,
    D2 = 0,
-   sodt_1(N, X_Pred, 0, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, Points).
+   sodt_1(N, X_Pred, 0, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, P).
 
 
 %!  sodt_1(+K, +X_Pred, +Time, +Time_Step, +Gain, +D1, +D2, +B0, +B1,
@@ -295,61 +303,55 @@ sodt(X_Pred, Duration, Sample_Time, Gain, B0, B1, B2, A0, A1, A2, Points) :-
 
 sodt_1(0, _, _, _, _, _, _, _, _, _, _, _, _, []) :-
    !.
-sodt_1(K, X_Pred, T, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, Y)|Points]) :-
+sodt_1(K, X_Pred, T, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, Y)|P]) :-
    call(X_Pred, T, X),
    Y is Gain * B0 * X + D1,
    D1_New is B1 * X - A1 * Y + D2,
    D2_New is B2 * X - A2 * Y,
    KK is K-1,
    T_Next is T + Time_Step,
-   sodt_1(KK, X_Pred, T_Next, Time_Step, Gain, D1_New, D2_New, B0, B1, B2, A0, A1, A2, Points).
+   sodt_1(KK, X_Pred, T_Next, Time_Step, Gain, D1_New, D2_New, B0, B1, B2, A0, A1, A2, P).
 
 
-%! fitness(+Measured_Open_Loop_Step_Response, +X_Pred,
+%! fitness(+Measured_Open_Loop_Step_Response_Segments, +X_Pred,
 %!         +Duration, +Gene_Values, -Fitness) is det.
 %
 %  Evaluate the fitness of a set gene values. The higher the fitness the
 %  better.
 %
-%  @arg Duration the number of seconds of
-%  Measured_Open_Loop_Step_Response that we are attempting to model
+%  @arg Duration the number of seconds of Measured_Open_Loop_Step_Response_RB that we are attempting to model
 
 :- det(fitness/5).
 
-fitness(Measured_Open_Loop_Step_Response, X_Pred, Duration, Gene_Values, Fitness) :-
-   catch(fitness_1(Measured_Open_Loop_Step_Response, X_Pred, Duration, Gene_Values, Fitness),
+fitness(Measured_OLSR_Segments, X_Pred, Duration, Gene_Values, Fitness) :-
+   catch(fitness_1(Measured_OLSR_Segments, X_Pred, Duration, Gene_Values, Fitness),
          evaluation_error,
          _,
          Fitness = 0).
 
 
-%! fitness_1(+Measured_Open_Loop_Step_Response, +X_Pred,
+%! fitness_1(+Measured_Open_Loop_Step_Response_Segments, +X_Pred,
 %!           +Duration, +Gene_Values,
 %!           -Fitness) is det.
 
-fitness_1(Measured_Open_Loop_Step_Response, X_Pred, Duration, [Sample_Time, Gain, B0, B1, B2, A1, A2], Fitness) :-
-   sodt(X_Pred, Duration, Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_Open_Loop_Step_Response),
-   model_error(Modelled_Open_Loop_Step_Response, Measured_Open_Loop_Step_Response, 0, Model_Error),
+fitness_1(Measured_OLSR_Segments, X_Pred, Duration, [Sample_Time, Gain, B0, B1, B2, A1, A2], Fitness) :-
+   sodt(X_Pred, Duration, Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
+   model_error(Modelled_OLSR, Measured_OLSR_Segments, 0, Model_Error),
    Fitness is 1 / Model_Error.
 
 
-%! model_error(+Modelled_Open_Loop_Step_Response, +Measured_Open_Loop_Step_Response,
-%!             +Fitness_Accum, -Total_Error) is det.
+%! model_error(+Modelled_Open_Loop_Step_Response,
+%!             +Measured_Open_Loop_Step_Response_Segments, +Fitness_Accum,
+%!             -Total_Error) is det.
 
 :- det(model_error/4).
 
 model_error([], _, Error, Error).
-model_error([p(T, V1)|P1], M0, E0, E) :-
-   measured_value(T, M0, M1, V2),
-   E1 is E0 + (V1-V2) ** 2,
-   model_error(P1, M1, E1, E).
+model_error([p(T, _)|P], RB, E0, E) :-
+   rb_lookup_range(T, _, V, RB),
+   E1 is E0 + V ** 2,
+   model_error(P, RB, E1, E).
 
-
-measured_value(T, [p(T_Measured, V)|M], M, V) :-
-   T >= T_Measured,
-   !.
-measured_value(T, [_|P], M, V) :-
-   measured_value(T, P, M, V).
 
 
 %!  galg(+Fitness_Pred, +Gene_Map, +Fitness_Plot, -Fittest_Genes) is
@@ -610,13 +612,6 @@ test(4) :-
    gene_bits_to_value([1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1], 0.0, 5.0, V),
    abs(V-5.0) =< 5.0/(1<<16).
 
-
-%! close_enough(+V1, +V2, +Width, +Range) is semidet.
-
-close_enough(V1, V2, Width, Range) :-
-   Quantum is Range/(1<<(Width-1)),
-   abs(V1-V2) =< Quantum.
-
 :- end_tests(spi).
 
 
@@ -634,3 +629,72 @@ fitness_progress_graph(Y_Scale_Max, Plot) :-
     send(W, open).
 
 
+%!  points_to_rb_tree(+Points, -RB_Tree_Out) is det.
+%
+%  Represent list of points as RB-tree of time ranges and values:
+%  Key = T1-T2
+%  Value = average of the values on point 1 and point 2
+
+:- det(points_to_rb_tree/2).
+
+points_to_rb_tree(Points, RB1) :-
+   rb_empty(RB0),
+   points_to_rb_tree_1(Points, RB0, RB1).
+
+
+%!  points_to_rb_tree_1(+Points, +RB_Tree_In, -RB_Tree_Out) is det.
+
+:- det(points_to_rb_tree_1/3).
+
+points_to_rb_tree_1([], RB, RB).
+points_to_rb_tree_1([p(T1, V1), p(T2, V2)|T], RB0, RB) :-
+   V is (V1 + V2) / 2,
+   rb_insert(RB0, T, (T1-T2)-V, RB1),
+   points_to_rb_tree_1([p(T2, V2)|T], RB1, RB).
+
+
+
+%! rb_lookup_range(+Key, +Key_Range, -Value, -RB) is semidet.
+%
+%  https://occasionallycogent.com/prolog_interval_tree/index.html
+
+rb_lookup_range(Key, Key_Range, Value, t(_, Tree)) =>
+    rb_lookup_range_1(Key, Key_Range, Value, Tree).
+
+rb_lookup_range_1(_, _, _Value, black('', _, _, '')) :-
+   !,
+   fail.
+rb_lookup_range_1(Key, Key_Range, Value, Tree) :-
+    arg(2, Tree, Start-End),
+    compare(CmpS, Key, Start),
+    compare(CmpE, Key, End),
+    rb_lookup_range_1(t(CmpS, CmpE), Key, Start-End, Key_Range, Value, Tree).
+
+rb_lookup_range_1(t(>, <), _, Start-End, Key_Range, Value, Tree) =>
+    arg(3, Tree, Value),
+    Key_Range = Start-End.
+rb_lookup_range_1(t(=, _), _, Start-End, Key_Range, Value, Tree) =>
+    arg(3, Tree, Value),
+    Key_Range = Start-End.
+rb_lookup_range_1(t(_, =), _, Start-End, Key_Range, Value, Tree) =>
+    arg(3, Tree, Value),
+    Key_Range = Start-End.
+rb_lookup_range_1(t(<, _), Key, _, Key_Range, Value, Tree) =>
+    arg(1, Tree, NTree),
+    rb_lookup_range_1(Key, Key_Range, Value, NTree).
+rb_lookup_range_1(t(_, >), Key, _, Key_Range, Value, Tree) =>
+    arg(4, Tree, NTree),
+    rb_lookup_range_1(Key, Key_Range, Value, NTree).
+
+
+:- begin_tests(rb_lookup_range).
+
+test(1) :-
+   L = [(0-50)-1, (51-100)-2, (101-150)-3],
+   list_to_rbtree(L, RB),
+   rb_lookup_range(67, KR, V, RB),
+   KR == (51-100),
+   V == 2.
+
+
+:- end_tests(rb_lookup_range).
