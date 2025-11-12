@@ -42,6 +42,8 @@ transfer function with a second-order polynomial in the denominator, and their s
 depends on the location of the system's poles within the unit circle in the z-plane.
 
 See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
+
+@tbd Rewrite mutate - drop use of append
 */
 
 :- use_module(library(lists),
@@ -55,22 +57,19 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 :- meta_predicate
    sodt(2, +, +, +, +, +, +, +, +, +, -),
    sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, +, -),
-   galg(3, +, -),
-   galg_1(+, +, +, +, +, 2, +, +, -, -),
-   fitness(+, 2, +, +, +, +, +, -),
-   fitness_1(+, 2, +, +, +, +, -).
+   galg(2, +, +, -),
+   galg_1(+, +, +, +, 2, +, +, -, -),
+   fitness(+, 2, +, +, -),
+   fitness_1(+, 2, +, +, -).
 
 %:- set_prolog_flag(optimise, true).
 
 %! galg_config(-Dict) is det.
 
-galg_config(galg_config{number_of_parameters: 5,
-                        parameter_bit_width: 16,
-                        range: 1.3,
+galg_config(galg_config{parameter_bit_width: 16,
                         population_size: 100,
                         max_generations: 1000,
                         mutation_rate: 0.01}).
-
 
 
 %!  ts is semidet.
@@ -79,12 +78,10 @@ user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_Open_Loop_Step_Response),
    fitness_progress_graph(6000, Fitness_Plot),
-   Gain = 100,
-   Model_Sample_Time = 5.0,
-   N is integer(Duration / Model_Sample_Time),
-   galg(fitness(Measured_Open_Loop_Step_Response, step_input(Step_Size), N, Model_Sample_Time, Gain), Fitness_Plot, Fittest_Genes),
-   Fittest_Genes = [B0, B1, B2, A1, A2],
-   writeln(n(N)),
+   Gene_Map = [gene(sample_time, 0, 1.0), gene(gain, 0, 100), gene(b0, -2.0, 2.0), gene(b1, -2.0, 2.0), gene(b2, -2.0, 2.0), gene(a1, -2.0, 2.0), gene(a2, -2.0, 2.0)],
+   galg(fitness(Measured_Open_Loop_Step_Response, step_input(Step_Size), Duration), Gene_Map, Fitness_Plot, Fittest_Genes),
+   Fittest_Genes = [Model_Sample_Time, Gain, B0, B1, B2, A1, A2],
+   N is integer(Duration/Model_Sample_Time),
    sodt(step_input(Step_Size), N, Model_Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_Open_Loop_Step_Response),
    append(Modelled_Open_Loop_Step_Response, Measured_Open_Loop_Step_Response, All_Points),
    y_values(All_Points, Y_Values),
@@ -270,9 +267,10 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
 
 :- det(sodt/11).
 
-sodt(X_Pred, N, Sample_Time, Gain, B0, B1, B2, A0, A1, A2, Points) :-
+sodt(X_Pred, Duration, Sample_Time, Gain, B0, B1, B2, A0, A1, A2, Points) :-
    assertion(A0 == 1),
    Time_Step = Sample_Time,
+   N is integer(Duration/Sample_Time),
    D1 = 0,
    D2 = 0,
    sodt_1(N, X_Pred, 0, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, Points).
@@ -308,26 +306,29 @@ sodt_1(K, X_Pred, T, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, Y)|P
 
 
 %! fitness(+Measured_Open_Loop_Step_Response, +X_Pred,
-%!         +Number_Of_Steps, +Sample_Time, +Gain, +Generation,
-%!         +Gene_Values, -Fitness) is det.
+%!         +Duration, +Gene_Values, -Fitness) is det.
 %
-%  The higher the fitness the better
+%  Evaluate the fitness of a set gene values. The higher the fitness the
+%  better.
+%
+%  @arg Duration the number of seconds of
+%  Measured_Open_Loop_Step_Response that we are attempting to model
 
-:- det(fitness/8).
+:- det(fitness/5).
 
-fitness(Measured_Open_Loop_Step_Response, X_Pred, N, Sample_Time, Gain, _, [B0, B1, B2, A1, A2], Fitness) :-
-   catch(fitness_1(Measured_Open_Loop_Step_Response, X_Pred, N, Sample_Time, Gain, [B0, B1, B2, A1, A2], Fitness),
+fitness(Measured_Open_Loop_Step_Response, X_Pred, Duration, Gene_Values, Fitness) :-
+   catch(fitness_1(Measured_Open_Loop_Step_Response, X_Pred, Duration, Gene_Values, Fitness),
          evaluation_error,
          _,
          Fitness = 0).
 
 
 %! fitness_1(+Measured_Open_Loop_Step_Response, +X_Pred,
-%!           +Number_Of_Steps, +Sample_Time, +Gain, +Gene_Values,
+%!           +Duration, +Gene_Values,
 %!           -Fitness) is det.
 
-fitness_1(Measured_Open_Loop_Step_Response, X_Pred, N, Sample_Time, Gain, [B0, B1, B2, A1, A2], Fitness) :-
-   sodt(X_Pred, N, Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_Open_Loop_Step_Response),
+fitness_1(Measured_Open_Loop_Step_Response, X_Pred, Duration, [Sample_Time, Gain, B0, B1, B2, A1, A2], Fitness) :-
+   sodt(X_Pred, Duration, Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_Open_Loop_Step_Response),
    model_error(Modelled_Open_Loop_Step_Response, Measured_Open_Loop_Step_Response, 0, Model_Error),
    Fitness is 1 / Model_Error.
 
@@ -351,43 +352,49 @@ measured_value(T, [_|P], M, V) :-
    measured_value(T, P, M, V).
 
 
-%!  galg(+Fitness_Pred, +Fitness_Plot, -Fittest_Genes) is det.
+%!  galg(+Fitness_Pred, +Gene_Map, +Fitness_Plot, -Fittest_Genes) is
+%!       det.
+%
+%  Gene_Map list of gene(Gene_Name, Lower_Limit, Upper_Limit)
 
-:- det(galg/3).
+:- det(galg/4).
 
-galg(Fitness_Pred, Fitness_Plot, Fittest_Genes) :-
+galg(Fitness_Pred, Gene_Map, Fitness_Plot, Fittest_Genes) :-
    galg_config(C),
-   Chromosome_Length is C.number_of_parameters * C.parameter_bit_width,
+   length(Gene_Map, Number_Of_Genes),
+   Chromosome_Length is Number_Of_Genes * C.parameter_bit_width,
    initial_population(C.population_size, Chromosome_Length, Initial_Population),
-   galg_1(0, C.max_generations, C.mutation_rate, C.parameter_bit_width, C.range, Fitness_Pred, Fitness_Plot, Initial_Population, _, Fittest_Genes).
+   galg_1(0, C.max_generations, C.mutation_rate, Gene_Map, Fitness_Pred, Fitness_Plot, Initial_Population, _, Fittest_Genes).
 
 
 %! galg_1(+Generation, +Max_Generations, +Mutation_Rate,
-%!        +Parameter_Bit_Width, +Range, +Fitness_Pred, +Fitness_Plot,
-%!        +Population_In, -Population_Out, -Fittest_Genes) is det.
+%!        +Gene_Map, +Fitness_Pred,
+%!        +Fitness_Plot, +Population_In, -Population_Out,
+%!        -Fittest_Genes) is det.
 %
 %  A Population is a list of individual(Fitness, Chromosome) terms where
 %  Chromosome is a list of bits which in turn are a concatenation of
 %  fixed width lists of bits (coded genes).
 
-:- det(galg_1/10).
+:- det(galg_1/9).
 
-galg_1(Generation, Max_Generations, _, Parameter_Bit_Width, Range, _, _, P0, P1, Fittest_Genes) :-
+galg_1(Generation, Max_Generations, _, Gene_Map, _, _, P0, P1, Fittest_Genes) :-
    Generation >= Max_Generations,
    !,
    sort(1, @>=, P0, [individual(_, Fittest_Chromosome)|_]),
    P1 = P0,
-   chromosome_gene_values(Fittest_Chromosome, Parameter_Bit_Width, Range, Fittest_Genes).
-galg_1(G, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Range, Fitness_Pred, Fitness_Plot, P0, Population_Out, Fittest_Gene) :-
-   update_fitness(P0, G, Fitness_Pred, Fitness_Plot, Parameter_Bit_Width, Range, P1),
+   chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes).
+galg_1(G, Max_Generations, Mutation_Rate, Gene_Map, Fitness_Pred, Fitness_Plot, P0, Population_Out, Fittest_Gene) :-
+   update_fitness(P0, Fitness_Pred, Fitness_Plot, Gene_Map, P1),
    max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P1),
+   writeln(f(Best_Fitness_Of_Generation)),
    in_pce_thread(send(Fitness_Plot, append, G, Best_Fitness_Of_Generation)),
    reproduce(P1, P2),
    phrase(swap_genes(P2), P3),
    mutate(P3, Mutation_Rate, P4),
    !,  % Green cut
    GG is G + 1,
-   galg_1(GG, Max_Generations, Mutation_Rate, Parameter_Bit_Width, Range, Fitness_Pred, Fitness_Plot, P4, Population_Out, Fittest_Gene).
+   galg_1(GG, Max_Generations, Mutation_Rate, Gene_Map, Fitness_Pred, Fitness_Plot, P4, Population_Out, Fittest_Gene).
 
 
 %! fitness_order(+A, +B) is semidet.
@@ -425,29 +432,29 @@ initial_chromosome(N, [Bit|Bits]) :-
 %!                +Fitness_Plot, +Parameter_Bit_Width, +Range,
 %!                -Updated_Population) is det.
 
-:- det(update_fitness/7).
+:- det(update_fitness/5).
 
-update_fitness([], _, _, _, _, _, []).
-update_fitness([individual(_, Chromosome)|P1],  Generation, Fitness_Pred, Fitness_Plot, Parameter_Bit_Width, Range, [individual(Fitness, Chromosome)|P2]) :-
-   chromosome_gene_values(Chromosome, Parameter_Bit_Width, Range, Gene_Values),
-   call(Fitness_Pred, Generation, Gene_Values, Fitness),
-   update_fitness(P1, Generation, Fitness_Pred, Fitness_Plot, Parameter_Bit_Width, Range, P2).
+update_fitness([], _, _, _, []).
+update_fitness([individual(_, Chromosome)|P1], Fitness_Pred, Fitness_Plot, Gene_Map, [individual(Fitness, Chromosome)|P2]) :-
+   chromosome_gene_values(Chromosome, Gene_Map, Gene_Values),
+   call(Fitness_Pred, Gene_Values, Fitness),
+   update_fitness(P1, Fitness_Pred, Fitness_Plot, Gene_Map, P2).
 
 
-%!  chromosome_gene_values(+Chromosome, +Parameter_Bit_Width, +Range,
-%!                        -Gene_Values) is det.
+%!  chromosome_gene_values(+Chromosome, +Gene_Map, -Gene_Values) is det.
 %
 %  @arg Gene_Values list of numeric values (the application parameters)
 
-:- det(chromosome_gene_values/4).
+:- det(chromosome_gene_values/3).
 
-chromosome_gene_values([], _, _, []) :-
+chromosome_gene_values([], _, []) :-
    !.
-chromosome_gene_values(Chromosome, Width, Range, [Value|Gene_Values]) :-
-   length(Gene, Width),
-   append(Gene, Chromosome_Rest, Chromosome),
-   gene_to_value(Gene, Range, Value),
-   chromosome_gene_values(Chromosome_Rest, Width, Range, Gene_Values).
+chromosome_gene_values(Chromosome, [gene(_, Lower_Limit, Upper_Limit)|Gene_Map], [Value|Gene_Values]) :-
+   galg_config(C),
+   length(Gene_Bits, C.parameter_bit_width),
+   append(Gene_Bits, Chromosome_Rest, Chromosome),
+   gene_bits_to_value(Gene_Bits, Lower_Limit, Upper_Limit, Value),
+   chromosome_gene_values(Chromosome_Rest, Gene_Map, Gene_Values).
 
 
 %! reproduce(+Population, -New_Population) is det.
@@ -564,77 +571,19 @@ step_input(Step_Size, _, Step_Size).
 
 
 
-%! value_to_gene(+Value, +Width, +Range, -Bits) is det.
+%! gene_bits_to_value(+Bits, +Lower_Limit, +Upper_Limit, -Value) is det.
 %
-%  A two's complement representation is used to represent all numbers
-%  positive and negative.
-%
-%  Positive numbers:
-%    The MSB is 0
-%    The biggest value in 16-bits is 0111_1111_1111_1111 = 32,767
-%
-%  Negative numbers:
-%    With the two's complement representation the MSB is
-%    treated as -(2^Width-1) and the bits to the right are added to give
-%    a negative number. For example in a 16 bit system:
-%
-%    1000_0000_0000_0000 is -2^15 = -32768 (the biggest negative value)
-%    1000_0000_0000_0010 is -2^15 + 2 = -32766
-%    1111_1111_1111_1111 is -2^15 + 2^15 - 1 = -1
-%
-%  Example with 16 bits and range of -100.0..100.0:
-%    -100.0 --> [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
-%       0.0 --> [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
-%    +100.0 --> [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+%  Inverse of value_to_gene_bits/4
 %
 %  @arg Value float
-%  @arg Width integer number of bits in the gene
-%  @arg Range float the max/min limit of Value
-%  @arg Bits list of 1's and 0's [Sign_Bit, MSB, ... LSB]
+%  @arg Bits list of 1's and 0's [MSB, ... LSB]
 
-:- det(value_to_gene/4).
+:- det(gene_bits_to_value/4).
 
-value_to_gene(Value, Width, Range, [Sign_Bit|Bits]) :-
-   assertion((-Range =< Value, Value =< Range)),
-   NV is Value/Range,
-   (   NV < 0
-   ->  I is 1<<(Width-1) + integer(1<<(Width-1) * NV),
-       Sign_Bit = 1
-
-   ;   I is integer((1<<(Width-1)-1) * NV),
-       Sign_Bit = 0
-   ),
-   int_to_bits(I, Width-1, Bits).
-
-
-%! int_to_bits(+I, +K, -Encoding) is det.
-
-int_to_bits(_, 0, []) :-
-   !.
-int_to_bits(I, K, [Bit|T]) :-
-   KK is K - 1,
-   Bit is getbit(I, KK),
-   int_to_bits(I, KK, T).
-
-
-
-%! gene_to_value(+Encoding, +Range, -Value) is det.
-%
-%  Inverse of value_to_gene/4
-%
-%  @arg Value float
-%  @arg Bits list of 1's and 0's [Sign_Bit, MSB, ... LSB]
-
-:- det(gene_to_value/3).
-
-gene_to_value([Sign_Bit|Bits], Range, Value) :-
-   length([Sign_Bit|Bits], Width),
+gene_bits_to_value(Bits, Lower_Limit, Upper_Limit, Value) :-
+   length(Bits, Width),
    bits_to_int(Bits, 0, I),
-   (   Sign_Bit == 1
-   ->  Neg_Offset is -(1<<(Width-1))
-   ;   Neg_Offset = 0
-   ),
-   Value is Range * (Neg_Offset + I)/(1<<(Width-1)).
+   Value is Lower_Limit + ((Upper_Limit-Lower_Limit) * I/(1<<Width)).
 
 
 %! bits_to_int(+Encoding, +Accum, -I) is det.
@@ -648,39 +597,18 @@ bits_to_int([H|T], Accum, I) :-
 :- begin_tests(spi).
 
 test(1) :-
-   value_to_gene(-100.0, 16, 100.0, L),
-   L == [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0].
+   gene_bits_to_value([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], -100.0, 100.0, -100.0).
 
 test(2) :-
-   value_to_gene(0.0, 16, 100.0, L),
-   L == [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0].
+   gene_bits_to_value([1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], -100.0, 100.0, 0.0).
 
 test(3) :-
-   value_to_gene(100.0, 16, 100.0, L),
-   L == [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1].
+   gene_bits_to_value([1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1], -100.0, 100.0, V),
+   abs(V-100.0) =< 200.0/(1<<16).
 
 test(4) :-
-   gene_to_value([1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], 100.0, -100.0).
-
-test(5) :-
-   gene_to_value([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0], 100.0, 0.0).
-
-test(6) :-
-   L = [0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-   Range = 100.0,
-   length(L, Width),
-   gene_to_value(L, 100.0, V),
-   close_enough(100.0, V, Width, Range).
-
-test(7) :-
-   Range = 100.0,
-   Width = 16,
-   forall((   member(V, [93.41, 87.12, 70.73, 62.84, 58.25, 43.16, 35.57, 26.98, 19.49, 5.91]),
-              member(Sign, [-1, +1]),
-              V1 is V * Sign),
-          (   value_to_gene(V1, Width, Range, L),
-              gene_to_value(L, Range, V2),
-              close_enough(V1, V2, Width, Range))).
+   gene_bits_to_value([1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1], 0.0, 5.0, V),
+   abs(V-5.0) =< 5.0/(1<<16).
 
 
 %! close_enough(+V1, +V2, +Width, +Range) is semidet.
