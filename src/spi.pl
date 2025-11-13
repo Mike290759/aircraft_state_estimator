@@ -82,22 +82,25 @@ user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(6000, Fitness_Plot),
-   Gene_Map = [gene(sample_time, 0, 1.0), gene(gain, 1, 100), gene(b0, -2.0, 2.0), gene(b1, -2.0, 2.0), gene(b2, -2.0, 2.0), gene(a1, -2.0, 2.0), gene(a2, -2.0, 2.0)],
+   Gene_Map = [gene(sample_time, 4.0, 5.0), gene(gain, 100, 100), gene(b0, -1.3, 1.3), gene(b1, -1.3, 1.3), gene(b2, -1.3, 1.3), gene(a1, -1.3, 1.3), gene(a2, -1.3, 1.3)],
    points_to_rb_tree(Measured_OLSR, Measured_OLSR_Segments),
    galg(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration), Gene_Map, Fitness_Plot, Fittest_Genes),
    Fittest_Genes = [Model_Sample_Time, Gain, B0, B1, B2, A1, A2],
    N is integer(Duration/Model_Sample_Time),
    sodt(step_input(Step_Size), N, Model_Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
-   append(Modelled_OLSR, Measured_OLSR, All_Points),
-   y_values(All_Points, Y_Values),
-   min_member(Min, Y_Values),
-   max_member(Max, Y_Values),
+   y_values(Modelled_OLSR, Modelled_Y_Values),
+   min_member(Modelled_Min, Modelled_Y_Values),
+   min_member(Modelled_Max, Modelled_Y_Values),
+   writeln(modelled_range(Modelled_Min, Modelled_Max)),
+   y_values(Measured_OLSR, Measured_Y_Values),
+   min_member(Measured_Min, Measured_Y_Values),
+   max_member(Measured_Max, Measured_Y_Values),
    format(string(Title), 'sodt - ~w', [Fittest_Genes]),
    new(W, auto_sized_picture(Title)),
    send(W, max_size, size(2000, 600)),
    send(W, display, new(Plotter, plotter)),
    send(Plotter, axis, plot_axis(x, 0.0, Duration, @(default), 1500)),
-   send(Plotter, axis, plot_axis(y, Min, Max, @(default), 400)),
+   send(Plotter, axis, plot_axis(y, Measured_Min, Measured_Max, @(default), 400)),
    send(Plotter, graph, new(Blue_Plot, plot_graph)),
    send(Blue_Plot, colour, blue),
    send(Plotter, graph, new(Black_Plot, plot_graph)),
@@ -382,17 +385,17 @@ galg_1(Generation, Max_Generations, _, _, Gene_Map, _, _, P0, P1, Fittest_Genes)
    sort(1, @>=, P0, [individual(_, Fittest_Chromosome)|_]),
    P1 = P0,
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes).
-galg_1(G, Max_Generations, Mutation_Rate, Chromosome_Length, Gene_Map, Fitness_Pred, Fitness_Plot, P0, Population_Out, Fittest_Gene) :-
+galg_1(G, Max_Generations, Mutation_Rate, Chromosome_Length, Gene_Map, Fitness_Pred, Fitness_Plot, P0, Population_Out, Fittest_Genes) :-
    update_fitness(P0, Fitness_Pred, Fitness_Plot, Gene_Map, P1),
    max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P1),
-   writeln(f(Best_Fitness_Of_Generation)),
+   writeln(G-f(Best_Fitness_Of_Generation)),
    in_pce_thread(send(Fitness_Plot, append, G, Best_Fitness_Of_Generation)),
    reproduce(P1, P2),
    phrase(swap_genes(P2, Chromosome_Length), P3),
    mutate(P3, Mutation_Rate, P4),
    !,  % Green cut
    GG is G + 1,
-   galg_1(GG, Max_Generations, Mutation_Rate, Chromosome_Length, Gene_Map, Fitness_Pred, Fitness_Plot, P4, Population_Out, Fittest_Gene).
+   galg_1(GG, Max_Generations, Mutation_Rate, Chromosome_Length, Gene_Map, Fitness_Pred, Fitness_Plot, P4, Population_Out, Fittest_Genes).
 
 
 %! fitness_order(+A, +B) is semidet.
