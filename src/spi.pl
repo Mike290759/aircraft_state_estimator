@@ -42,8 +42,6 @@ transfer function with a second-order polynomial in the denominator, and their s
 depends on the location of the system's poles within the unit circle in the z-plane.
 
 See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
-
-@tbd Rewrite mutate - drop use of append
 */
 
 :- use_module(library(lists),
@@ -51,21 +49,20 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
                 max_member/2,
                 member/2,
                 append/3,
-                max_member/3,
-                nextto/3
+                max_member/3
               ]).
 :- use_module(library(pce), [new/2, send/2, get/3, in_pce_thread/1]).
 :- use_module(library(debug), [assertion/1]).
 :- use_module(library(clpfd)).
 :- use_module(library(random), [random_between/3, random_select/3, maybe/1]).
 :- use_module(library(exceptions), [catch/4]).
-:- use_module(library(rbtrees), [list_to_rbtree/2]).
+:- use_module(library(rbtrees), [list_to_rbtree/2, rb_empty/1, rb_insert/4]).
 
 :- meta_predicate
    sodt(2, +, +, +, +, +, +, +, +, +, -),
    sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, +, -),
    galg(2, +, +, -),
-   galg_1(+, +, +, +, 2, +, +, -, -),
+   galg_1(+, +, +, +, +, 2, +, +, -, -),
    fitness(+, 2, +, +, -),
    fitness_1(+, 2, +, +, -).
 
@@ -73,9 +70,9 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 
 %! galg_config(-Dict) is det.
 
-galg_config(galg_config{parameter_bit_width: 16,
+galg_config(galg_config{chromosome_length: 16,
                         population_size: 100,
-                        max_generations: 1000,
+                        max_generations: 100,
                         mutation_rate: 0.01}).
 
 
@@ -178,7 +175,7 @@ abs_max_order(A, B) :-
 %! normalised(+P, +Normalisation_Factor, -P_Normalised) is det.
 
 normalised([], _, []).
-normalised([p(T, V1)|P1], Normalisation_Factor, [T-V2|P2]) :-
+normalised([p(T, V1)|P1], Normalisation_Factor, [p(T, V2)|P2]) :-
    V2 is V1 / Normalisation_Factor,
    normalised(P1, Normalisation_Factor, P2).
 
@@ -364,39 +361,38 @@ model_error([p(T, _)|P], RB, E0, E) :-
 galg(Fitness_Pred, Gene_Map, Fitness_Plot, Fittest_Genes) :-
    galg_config(C),
    length(Gene_Map, Number_Of_Genes),
-   Chromosome_Length is Number_Of_Genes * C.parameter_bit_width,
+   Chromosome_Length is Number_Of_Genes * C.chromosome_length,
    initial_population(C.population_size, Chromosome_Length, Initial_Population),
-   galg_1(0, C.max_generations, C.mutation_rate, Gene_Map, Fitness_Pred, Fitness_Plot, Initial_Population, _, Fittest_Genes).
+   galg_1(0, C.max_generations, C.mutation_rate, C.chromosome_length, Gene_Map, Fitness_Pred, Fitness_Plot, Initial_Population, _, Fittest_Genes).
 
 
 %! galg_1(+Generation, +Max_Generations, +Mutation_Rate,
-%!        +Gene_Map, +Fitness_Pred,
-%!        +Fitness_Plot, +Population_In, -Population_Out,
-%!        -Fittest_Genes) is det.
+%!        +Chromosome_Length, +Gene_Map, +Fitness_Pred, +Fitness_Plot,
+%!        +Population_In, -Population_Out, -Fittest_Genes) is det.
 %
 %  A Population is a list of individual(Fitness, Chromosome) terms where
 %  Chromosome is a list of bits which in turn are a concatenation of
 %  fixed width lists of bits (coded genes).
 
-:- det(galg_1/9).
+:- det(galg_1/10).
 
-galg_1(Generation, Max_Generations, _, Gene_Map, _, _, P0, P1, Fittest_Genes) :-
+galg_1(Generation, Max_Generations, _, _, Gene_Map, _, _, P0, P1, Fittest_Genes) :-
    Generation >= Max_Generations,
    !,
    sort(1, @>=, P0, [individual(_, Fittest_Chromosome)|_]),
    P1 = P0,
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes).
-galg_1(G, Max_Generations, Mutation_Rate, Gene_Map, Fitness_Pred, Fitness_Plot, P0, Population_Out, Fittest_Gene) :-
+galg_1(G, Max_Generations, Mutation_Rate, Chromosome_Length, Gene_Map, Fitness_Pred, Fitness_Plot, P0, Population_Out, Fittest_Gene) :-
    update_fitness(P0, Fitness_Pred, Fitness_Plot, Gene_Map, P1),
    max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P1),
    writeln(f(Best_Fitness_Of_Generation)),
    in_pce_thread(send(Fitness_Plot, append, G, Best_Fitness_Of_Generation)),
    reproduce(P1, P2),
-   phrase(swap_genes(P2), P3),
+   phrase(swap_genes(P2, Chromosome_Length), P3),
    mutate(P3, Mutation_Rate, P4),
    !,  % Green cut
    GG is G + 1,
-   galg_1(GG, Max_Generations, Mutation_Rate, Gene_Map, Fitness_Pred, Fitness_Plot, P4, Population_Out, Fittest_Gene).
+   galg_1(GG, Max_Generations, Mutation_Rate, Chromosome_Length, Gene_Map, Fitness_Pred, Fitness_Plot, P4, Population_Out, Fittest_Gene).
 
 
 %! fitness_order(+A, +B) is semidet.
@@ -431,7 +427,7 @@ initial_chromosome(N, [Bit|Bits]) :-
 
 
 %! update_fitness(+Population, +Generation, +Fitness_Pred,
-%!                +Fitness_Plot, +Parameter_Bit_Width, +Range,
+%!                +Fitness_Plot, +Chromesome_Length, +Range,
 %!                -Updated_Population) is det.
 
 :- det(update_fitness/5).
@@ -453,7 +449,7 @@ chromosome_gene_values([], _, []) :-
    !.
 chromosome_gene_values(Chromosome, [gene(_, Lower_Limit, Upper_Limit)|Gene_Map], [Value|Gene_Values]) :-
    galg_config(C),
-   length(Gene_Bits, C.parameter_bit_width),
+   length(Gene_Bits, C.chromosome_length),
    append(Gene_Bits, Chromosome_Rest, Chromosome),
    gene_bits_to_value(Gene_Bits, Lower_Limit, Upper_Limit, Value),
    chromosome_gene_values(Chromosome_Rest, Gene_Map, Gene_Values).
@@ -516,27 +512,31 @@ total_fitness([individual(F, _)|T], Accum, Fitness) :-
    total_fitness(T, New_Accum, Fitness).
 
 
-%! swap_genes(+Population) // is det.
+%! swap_genes(+Population, +Chromosome_Length) // is det.
 
-:- det(swap_genes//1).
+:- det(swap_genes//2).
 
-swap_genes([]) -->
+swap_genes([], _) -->
    !,
    [].
-swap_genes(P0) -->
+swap_genes(P0, Chromosome_Length) -->
    { random_select(individual(_, C1), P0, P1),
      random_select(individual(_, C2), P1, P2),
-     length(C1, Chromosome_Length),
      random_between(0, Chromosome_Length, I),
-     length(C1_Left, I),
-     length(C2_Left, I),
-     append(C1_Left, C1_Right, C1),  % Determines C1_Left, C1_Right
-     append(C2_Left, C2_Right, C2),  % Determines C2_Left, C2_Right
-     append(C1_Left, C2_Right, C3),  % Determines C2
-     append(C2_Left, C1_Right, C4)   % Determines C4
+     swap_gene(0, I, C1, C2, C3, C4)
    },
    [individual(_, C3), individual(_, C4)],
-   swap_genes(P2).
+   swap_genes(P2, Chromosome_Length).
+
+
+%!  swap_gene(+Position_Index, +Swap_Position, +C1, +C2, -C3, -C4) is
+%!            det.
+
+swap_gene(I, I, C1, C2, C1, C2) :-
+   !.
+swap_gene(I, P, [H1|C1], [H2|C2], [H2|C3], [H1|C4]) :-
+   II is I + 1,
+   swap_gene(II, P, C1, C2, C3, C4).
 
 
 %! mutate(+Population, +Mutation_Rate, -New_Population) is det.
@@ -647,10 +647,13 @@ points_to_rb_tree(Points, RB1) :-
 :- det(points_to_rb_tree_1/3).
 
 points_to_rb_tree_1([], RB, RB).
-points_to_rb_tree_1([p(T1, V1), p(T2, V2)|T], RB0, RB) :-
+points_to_rb_tree_1([_], RB, RB) :-
+   !.
+points_to_rb_tree_1([p(T1, V1), p(T2, V2)|P], RB0, RB) :-
+   !,
    V is (V1 + V2) / 2,
-   rb_insert(RB0, T, (T1-T2)-V, RB1),
-   points_to_rb_tree_1([p(T2, V2)|T], RB1, RB).
+   rb_insert(RB0, (T1-T2), V, RB1),
+   points_to_rb_tree_1([p(T2, V2)|P], RB1, RB).
 
 
 
