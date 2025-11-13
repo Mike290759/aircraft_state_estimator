@@ -46,7 +46,6 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 
 :- use_module(library(lists),
               [ member/2,
-                append/3,
                 max_member/3,
                 min_member/3
               ]).
@@ -59,8 +58,8 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 :- use_module(library(dcg/basics)).
 
 :- meta_predicate
-   sodt(2, +, +, +, +, +, +, +, +, +, -),
-   sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, +, -),
+   sodt(2, +, +, +, +, +, +, +, +, -),
+   sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, -),
    galg(2, +, +, -),
    galg_1(+, +, +, +, +, +, 2, +, +, -, -),
    fitness(+, 2, +, +, -),
@@ -70,9 +69,9 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 
 %! galg_config(-Dict) is det.
 
-galg_config(galg_config{chromosome_length: 16,
+galg_config(galg_config{num_gene_bits: 16,
                         population_size: 100,
-                        max_generations: 100,
+                        max_generations: 500,
                         mutation_rate: 0.01}).
 
 
@@ -82,11 +81,12 @@ user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(10, Fitness_Plot),
-   Gene_Map = [gene(sample_time, 4.0, 5.0), gene(gain, 100, 100), gene(b0, -1.3, 1.3), gene(b1, -1.3, 1.3), gene(b2, -1.3, 1.3), gene(a1, -1.3, 1.3), gene(a2, -1.3, 1.3)],
+   RL = 1.3,
+   Gene_Map = [gene(sample_time, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL)],
    points_to_rb_tree(Measured_OLSR, Measured_OLSR_Segments),
    galg(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration), Gene_Map, Fitness_Plot, Fittest_Genes),
-   Fittest_Genes = [Model_Sample_Time, Gain, B0, B1, B2, A1, A2],
-   sodt(step_input(Step_Size), Duration, Model_Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
+   Fittest_Genes = [Model_Sample_Time, B0, B1, B2, A1, A2],
+   sodt(step_input(Step_Size), Duration, Model_Sample_Time, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
    y_values(Modelled_OLSR, Modelled_Y_Values),
    min_member(@=<, Modelled_Min, Modelled_Y_Values),
    max_member(@=<, Modelled_Max, Modelled_Y_Values),
@@ -279,7 +279,7 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
    y_values(T1, T2).
 
 
-%!  sodt(+X_Pred, +Duration, +Sample_Time, +Gain, +B0, +B1, +B2,
+%!  sodt(+X_Pred, +Duration, +Sample_Time, +B0, +B1, +B2,
 %!       +A0, +A1, +A2, -Points) is det.
 %
 %  Generate a time series of N inputs (X values) by passing T
@@ -298,23 +298,22 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
 %  Reference
 %  https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter.html
 %
-%  @arg Gain the steady state gain
 %  @arg N series length
 %  @arg X_Pred closure foo(..., Time, X)
 %  @arg Points RB-tree where key = T
 %
-:- det(sodt/11).
+:- det(sodt/10).
 
-sodt(X_Pred, Duration, Sample_Time, Gain, B0, B1, B2, A0, A1, A2, P) :-
+sodt(X_Pred, Duration, Sample_Time, B0, B1, B2, A0, A1, A2, P) :-
    assertion(A0 == 1),
    Time_Step = Sample_Time,
    N is integer(Duration/Sample_Time),
    D1 = 0,
    D2 = 0,
-   sodt_1(N, X_Pred, 0, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, P).
+   sodt_1(N, X_Pred, 0, Time_Step, D1, D2, B0, B1, B2, A0, A1, A2, P).
 
 
-%!  sodt_1(+K, +X_Pred, +Time, +Time_Step, +Gain, +D1, +D2, +B0, +B1,
+%!  sodt_1(+K, +X_Pred, +Time, +Time_Step, +D1, +D2, +B0, +B1,
 %!         +B2, +A0, +A1, +A2, -Points) is det.
 %
 % From Python implementation:
@@ -329,18 +328,18 @@ sodt(X_Pred, Duration, Sample_Time, Gain, B0, B1, B2, A0, A1, A2, P) :-
 %        d1 = b[1] * x[n] - a[1] * y[n] + d2
 %        d2 = b[2] * x[n] - a[2] * y[n]
 
-:- det(sodt_1/14).
+:- det(sodt_1/13).
 
-sodt_1(0, _, _, _, _, _, _, _, _, _, _, _, _, []) :-
+sodt_1(0, _, _, _, _, _, _, _, _, _, _, _, []) :-
    !.
-sodt_1(K, X_Pred, T, Time_Step, Gain, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, Y)|P]) :-
+sodt_1(K, X_Pred, T, Time_Step, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, Y)|P]) :-
    call(X_Pred, T, X),
-   Y is Gain * B0 * X + D1,
+   Y is B0 * X + D1,
    D1_New is B1 * X - A1 * Y + D2,
    D2_New is B2 * X - A2 * Y,
    KK is K-1,
    T_Next is T + Time_Step,
-   sodt_1(KK, X_Pred, T_Next, Time_Step, Gain, D1_New, D2_New, B0, B1, B2, A0, A1, A2, P).
+   sodt_1(KK, X_Pred, T_Next, Time_Step, D1_New, D2_New, B0, B1, B2, A0, A1, A2, P).
 
 
 %! fitness(+Measured_Open_Loop_Step_Response_Segments, +X_Pred,
@@ -364,8 +363,8 @@ fitness(Measured_OLSR_Segments, X_Pred, Duration, Gene_Values, Fitness) :-
 %!           +Duration, +Gene_Values,
 %!           -Fitness) is det.
 
-fitness_1(Measured_OLSR_Segments, X_Pred, Duration, [Sample_Time, Gain, B0, B1, B2, A1, A2], Fitness) :-
-   sodt(X_Pred, Duration, Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
+fitness_1(Measured_OLSR_Segments, X_Pred, Duration, [Sample_Time, B0, B1, B2, A1, A2], Fitness) :-
+   sodt(X_Pred, Duration, Sample_Time, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
    model_error(Modelled_OLSR, Measured_OLSR_Segments, 0, Model_Error),
    Fitness is 1 / Model_Error.
 
@@ -393,10 +392,8 @@ model_error([p(T, V_Modelled)|P], RB, E0, E) :-
 
 galg(Fitness_Pred, Gene_Map, Fitness_Plot, Fittest_Genes) :-
    galg_config(C),
-   length(Gene_Map, Number_Of_Genes),
-   Chromosome_Length is Number_Of_Genes * C.chromosome_length,
-   initial_population(C.population_size, Chromosome_Length, Initial_Population),
-   galg_1(0, C.max_generations, C.mutation_rate, C.chromosome_length, C.population_size, Gene_Map, Fitness_Pred, Fitness_Plot, Initial_Population, _, Fittest_Genes).
+   initial_population(C.population_size, Gene_Map, C.num_gene_bits, Initial_Population),
+   galg_1(0, C.max_generations, C.mutation_rate, C.population_size, C.num_gene_bits, Gene_Map, Fitness_Pred, Fitness_Plot, Initial_Population, _, Fittest_Genes).
 
 
 %! galg_1(+Generation, +Max_Generations, +Mutation_Rate,
@@ -405,8 +402,7 @@ galg(Fitness_Pred, Gene_Map, Fitness_Plot, Fittest_Genes) :-
 %!        -Fittest_Genes) is det.
 %
 %  A Population is a list of individual(Fitness, Chromosome) terms where
-%  Chromosome is a list of bits which in turn are a concatenation of
-%  fixed width lists of bits (coded genes).
+%  Chromosome is a list of g(Gene_ID, Gene_Bits).
 
 :- det(galg_1/11).
 
@@ -416,18 +412,18 @@ galg_1(Generation, Max_Generations, _, _, _, Gene_Map, _, _, P0, P1, Fittest_Gen
    sort(1, @>=, P0, [individual(_, Fittest_Chromosome)|_]),
    P1 = P0,
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes).
-galg_1(G, Max_Generations, Mutation_Rate, Chromosome_Length, Population_Size, Gene_Map, Fitness_Pred, Fitness_Plot, P0, P5, Fittest_Genes) :-
+galg_1(G, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_Map, Fitness_Pred, Fitness_Plot, P0, P5, Fittest_Genes) :-
    assertion((length(P0, N), N == Population_Size)),
-   update_fitness(P0, Fitness_Pred, Fitness_Plot, Gene_Map, P1),
+   update_fitness(P0, Gene_Map, Fitness_Pred, Fitness_Plot, P1),
    max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P1),
    % writeln(G-f(Best_Fitness_Of_Generation)),
    in_pce_thread(send(Fitness_Plot, append, G, Best_Fitness_Of_Generation)),
    reproduce(P1, P2),
-   phrase(swap_genes(P2, Chromosome_Length), P3),
+   phrase(swap_genes(P2, Num_Gene_Bits), P3),
    mutate(P3, Mutation_Rate, P4),
    !,  % Green cut
    GG is G + 1,
-   galg_1(GG, Max_Generations, Mutation_Rate, Chromosome_Length, Population_Size, Gene_Map, Fitness_Pred, Fitness_Plot, P4, P5, Fittest_Genes).
+   galg_1(GG, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_Map, Fitness_Pred, Fitness_Plot, P4, P5, Fittest_Genes).
 
 
 %! fitness_order(+A, +B) is semidet.
@@ -436,42 +432,54 @@ fitness_order(individual(F1, _), individual(F2, _)) :-
    F1 =< F2.
 
 
-%!  initial_population(+Population_Size, +Fitness_Pred, -Population) is
-%!                     det.
+%!  initial_population(+Population_Size, +Gene_Map, +Num_Gene_Bits,
+%!                     -Population) is det.
 
-:- det(initial_population/3).
+:- det(initial_population/4).
 
-initial_population(0, _, []) :-
+initial_population(0, _, _, []) :-
    !.
-initial_population(N, Chromosome_Length, [individual(_, Chromosome)|P]) :-
-   initial_chromosome(Chromosome_Length, Chromosome),
+initial_population(N, Gene_Map, Num_Gene_Bits, [individual(_, Chromosome)|P]) :-
+   phrase(initial_chromosome(Gene_Map, Num_Gene_Bits), Chromosome),
    NN is N - 1,
-   initial_population(NN, Chromosome_Length, P).
+   initial_population(NN, Gene_Map, Num_Gene_Bits, P).
 
 
-%!  initial_chromosome(+N, -Chromosome) is det.
+%! initial_chromosome(+Gene_Map, +Num_Gene_Bits) // is det.
 
-:- det(initial_chromosome/2).
+initial_chromosome([], _) -->
+   [].
+initial_chromosome([gene(Gene_ID, _, _)|M], Num_Gene_Bits) -->
+   {  initial_gene_bits(Num_Gene_Bits, Gene_Bits)
+   },
+   [g(Gene_ID, Gene_Bits)],
+   initial_chromosome(M, Num_Gene_Bits).
 
-initial_chromosome(0, []) :-
+
+
+%!  initial_gene_bits(+N, -Gene_Bits) is det.
+
+:- det(initial_gene_bits/2).
+
+initial_gene_bits(0, []) :-
    !.
-initial_chromosome(N, [Bit|Bits]) :-
+initial_gene_bits(N, [Bit|Bits]) :-
    random_between(0, 1, Bit),
    NN is N - 1,
-   initial_chromosome(NN, Bits).
+   initial_gene_bits(NN, Bits).
 
 
-%! update_fitness(+Population, +Generation, +Fitness_Pred,
-%!                +Fitness_Plot, +Chromesome_Length, +Range,
+%! update_fitness(+Population, +Gene_Map, +Fitness_Pred,
+%!                +Fitness_Plot,
 %!                -Updated_Population) is det.
 
 :- det(update_fitness/5).
 
 update_fitness([], _, _, _, []).
-update_fitness([individual(_, Chromosome)|P1], Fitness_Pred, Fitness_Plot, Gene_Map, [individual(Fitness, Chromosome)|P2]) :-
+update_fitness([individual(_, Chromosome)|P1], Gene_Map, Fitness_Pred, Fitness_Plot, [individual(Fitness, Chromosome)|P2]) :-
    chromosome_gene_values(Chromosome, Gene_Map, Gene_Values),
    call(Fitness_Pred, Gene_Values, Fitness),
-   update_fitness(P1, Fitness_Pred, Fitness_Plot, Gene_Map, P2).
+   update_fitness(P1, Gene_Map, Fitness_Pred, Fitness_Plot, P2).
 
 
 %!  chromosome_gene_values(+Chromosome, +Gene_Map, -Gene_Values) is det.
@@ -482,12 +490,9 @@ update_fitness([individual(_, Chromosome)|P1], Fitness_Pred, Fitness_Plot, Gene_
 
 chromosome_gene_values([], _, []) :-
    !.
-chromosome_gene_values(Chromosome, [gene(_, Lower_Limit, Upper_Limit)|Gene_Map], [Value|Gene_Values]) :-
-   galg_config(C),
-   length(Gene_Bits, C.chromosome_length),
-   append(Gene_Bits, Chromosome_Rest, Chromosome),
+chromosome_gene_values([g(Gene_ID, Gene_Bits)|Genes], [gene(Gene_ID, Lower_Limit, Upper_Limit)|Gene_Map], [Value|Gene_Values]) :-
    gene_bits_to_value(Gene_Bits, Lower_Limit, Upper_Limit, Value),
-   chromosome_gene_values(Chromosome_Rest, Gene_Map, Gene_Values).
+   chromosome_gene_values(Genes, Gene_Map, Gene_Values).
 
 
 %! reproduce(+Population, -New_Population) is det.
@@ -547,34 +552,43 @@ total_fitness([individual(F, _)|T], Accum, Fitness) :-
    total_fitness(T, New_Accum, Fitness).
 
 
-%! swap_genes(+Population, +Chromosome_Length) // is det.
+%! swap_genes(+Population, +Num_Gene_Bits) // is det.
 
 :- det(swap_genes//2).
 
 swap_genes([], _) -->
    !,
    [].
-swap_genes(P0, Chromosome_Length) -->
+swap_genes(P0, Num_Gene_Bits) -->
    { random_select(individual(_, C1), P0, P1),
      random_select(individual(_, C2), P1, P2),
-     random_between(0, Chromosome_Length, I),
-     swap_gene(0, I, C1, C2, C3, C4)
+     swap_gene_bits(Num_Gene_Bits, C1, C2, C3, C4)
    },
    [individual(_, C3), individual(_, C4)],
-   swap_genes(P2, Chromosome_Length).
+   swap_genes(P2, Num_Gene_Bits).
 
 
-%!  swap_gene(+Position_Index, +Swap_Position, +C1, +C2, -C3, -C4) is
-%!            det.
+%!   swap_gene_bits(+Num_Gene_Bits, +Chromosome_1, +Chromosome_2,
+%!                  -Chromosome_3, -Chromosome_4) is det.
 
-swap_gene(I, I, C1, C2, C1, C2) :-
+swap_gene_bits(_, [], [], [], []).
+swap_gene_bits(Num_Gene_Bits, [g(Gene_ID_1, Bits_1)|C1], [g(Gene_ID_2, Bits_2)|C2], [g(Gene_ID_1, Bits_3)|C3], [g(Gene_ID_2, Bits_4)|C4]) :-
+    swap_gene_bits_1(0, Num_Gene_Bits, Bits_1, Bits_2, Bits_3, Bits_4),
+    swap_gene_bits(Num_Gene_Bits, C1, C2, C3, C4).
+
+
+%!  swap_gene_bits_1(+Position_Index, +Swap_Position, +B1, +B2, -B3, -B4) is det.
+
+swap_gene_bits_1(I, I, C1, C2, C1, C2) :-
    !.
-swap_gene(I, P, [H1|C1], [H2|C2], [H2|C3], [H1|C4]) :-
+swap_gene_bits_1(I, P, [H1|C1], [H2|C2], [H2|C3], [H1|C4]) :-
    II is I + 1,
-   swap_gene(II, P, C1, C2, C3, C4).
+   swap_gene_bits_1(II, P, C1, C2, C3, C4).
 
 
 %! mutate(+Population, +Mutation_Rate, -New_Population) is det.
+
+:- det(mutate/3).
 
 mutate([], _, []).
 mutate([individual(_, C1)|P1], Mutation_Rate, [individual(_, C2)|P2]) :-
@@ -582,16 +596,28 @@ mutate([individual(_, C1)|P1], Mutation_Rate, [individual(_, C2)|P2]) :-
    mutate(P1, Mutation_Rate, P2).
 
 
-%! mutate_1(+Chromosome, +Mutation_Rate, -New_Chromosome) is det.
+%! mutate_1(+Genes, +Mutation_Rate, -New_Genes) is det.
+
+:- det(mutate_1/3).
 
 mutate_1([], _, []).
-mutate_1([B|T1], Mutation_Rate, [Not_B|T2]) :-
+mutate_1([g(Gene_ID, Gene_Bits)|G1], Mutation_Rate, [g(Gene_ID, New_Gene_Bits)|G2]) :-
+   mutate_2(Gene_Bits, Mutation_Rate, New_Gene_Bits),
+   mutate_1(G1, Mutation_Rate, G2).
+
+
+%! mutate_2(+Bits, +Mutation_Rate, -New_Bits) is det.
+
+:- det(mutate_2/3).
+
+mutate_2([], _, []).
+mutate_2([B|T1], Mutation_Rate, [Not_B|T2]) :-
    maybe(Mutation_Rate),
    !,
    flip_bit(B, Not_B),
-   mutate_1(T1, Mutation_Rate, T2).
-mutate_1([B|T1], Mutation_Rate, [B|T2]) :-
-   mutate_1(T1, Mutation_Rate, T2).
+   mutate_2(T1, Mutation_Rate, T2).
+mutate_2([B|T1], Mutation_Rate, [B|T2]) :-
+   mutate_2(T1, Mutation_Rate, T2).
 
 
 %! flip_bit(+Bit_In, -Bit_Out) is det.
