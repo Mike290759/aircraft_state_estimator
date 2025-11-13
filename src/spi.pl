@@ -45,11 +45,10 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 */
 
 :- use_module(library(lists),
-              [ min_member/2,
-                max_member/2,
-                member/2,
+              [ member/2,
                 append/3,
-                max_member/3
+                max_member/3,
+                min_member/3
               ]).
 :- use_module(library(pce), [new/2, send/2, get/3, in_pce_thread/1]).
 :- use_module(library(debug), [assertion/1]).
@@ -57,12 +56,13 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 :- use_module(library(random), [random_between/3, random_select/3, maybe/1]).
 :- use_module(library(exceptions), [catch/4]).
 :- use_module(library(rbtrees), [list_to_rbtree/2, rb_empty/1, rb_insert/4]).
+:- use_module(library(dcg/basics)).
 
 :- meta_predicate
    sodt(2, +, +, +, +, +, +, +, +, +, -),
    sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, +, -),
    galg(2, +, +, -),
-   galg_1(+, +, +, +, +, 2, +, +, -, -),
+   galg_1(+, +, +, +, +, +, 2, +, +, -, -),
    fitness(+, 2, +, +, -),
    fitness_1(+, 2, +, +, -).
 
@@ -81,21 +81,21 @@ galg_config(galg_config{chromosome_length: 16,
 user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
-   fitness_progress_graph(6000, Fitness_Plot),
+   fitness_progress_graph(10, Fitness_Plot),
    Gene_Map = [gene(sample_time, 4.0, 5.0), gene(gain, 100, 100), gene(b0, -1.3, 1.3), gene(b1, -1.3, 1.3), gene(b2, -1.3, 1.3), gene(a1, -1.3, 1.3), gene(a2, -1.3, 1.3)],
    points_to_rb_tree(Measured_OLSR, Measured_OLSR_Segments),
    galg(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration), Gene_Map, Fitness_Plot, Fittest_Genes),
    Fittest_Genes = [Model_Sample_Time, Gain, B0, B1, B2, A1, A2],
-   N is integer(Duration/Model_Sample_Time),
-   sodt(step_input(Step_Size), N, Model_Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
+   sodt(step_input(Step_Size), Duration, Model_Sample_Time, Gain, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
    y_values(Modelled_OLSR, Modelled_Y_Values),
-   min_member(Modelled_Min, Modelled_Y_Values),
-   min_member(Modelled_Max, Modelled_Y_Values),
+   min_member(@=<, Modelled_Min, Modelled_Y_Values),
+   max_member(@=<, Modelled_Max, Modelled_Y_Values),
    writeln(modelled_range(Modelled_Min, Modelled_Max)),
    y_values(Measured_OLSR, Measured_Y_Values),
-   min_member(Measured_Min, Measured_Y_Values),
-   max_member(Measured_Max, Measured_Y_Values),
-   format(string(Title), 'sodt - ~w', [Fittest_Genes]),
+   min_member(@=<, Measured_Min, Measured_Y_Values),
+   max_member(@=<, Measured_Max, Measured_Y_Values),
+   gene_summary(Gene_Map, Fittest_Genes, Gene_Summary),
+   format(string(Title), 'sodt - ~w', [Gene_Summary]),
    new(W, auto_sized_picture(Title)),
    send(W, max_size, size(2000, 600)),
    send(W, display, new(Plotter, plotter)),
@@ -136,6 +136,36 @@ legend_1([item(Legend_Text, Colour)|T], Plotter, X, Y, Spacing, Width, Total_Wid
    Next_X #= X + Text_Width + Spacing,
    New_Width #= Width + Text_Width + Spacing,
    legend_1(T, Plotter, Next_X, Y, Spacing, New_Width, Total_Width).
+
+
+%! gene_summary(+Gene_Map, +Genes, -Gene_Summary:string) is det.
+
+gene_summary(Gene_Map, Fittest_Genes, Gene_Summary) :-
+   phrase(gene_summary_1(Gene_Map, Fittest_Genes), Codes),
+   string_codes(Gene_Summary, Codes).
+
+
+%! gene_summary_1(+Gene_Map, +Genes) is det.
+
+gene_summary_1([gene(Gene_ID, _, _)], [V]) -->
+   !,
+   gene_summary_2(Gene_ID, V).
+
+gene_summary_1([gene(Gene_ID, _, _)|Gene_Map], [V|T]) -->
+   gene_summary_2(Gene_ID, V),
+   ", ",
+   gene_summary_1(Gene_Map, T).
+
+
+%! gene_summary_2(+Gene_ID, +V) is det.
+
+gene_summary_2(Gene_ID, V) -->
+   atom(Gene_ID),
+   "=",
+   {format(codes(Codes), '~2f', [V])},
+   Codes.
+
+
 
 
 %! measured_open_loop_step_response(+File_Name, +Duration, -Sample_Time,
@@ -249,7 +279,7 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
    y_values(T1, T2).
 
 
-%!  sodt(+X_Pred, +N, +Sample_Time, +Gain, +B0, +B1, +B2,
+%!  sodt(+X_Pred, +Duration, +Sample_Time, +Gain, +B0, +B1, +B2,
 %!       +A0, +A1, +A2, -Points) is det.
 %
 %  Generate a time series of N inputs (X values) by passing T
@@ -347,9 +377,9 @@ fitness_1(Measured_OLSR_Segments, X_Pred, Duration, [Sample_Time, Gain, B0, B1, 
 :- det(model_error/4).
 
 model_error([], _, Error, Error).
-model_error([p(T, _)|P], RB, E0, E) :-
-   rb_lookup_range(T, _, V, RB),
-   E1 is E0 + V ** 2,
+model_error([p(T, V_Modelled)|P], RB, E0, E) :-
+   rb_lookup_range(T, _, V_Measured, RB),
+   E1 is E0 + (V_Modelled-V_Measured) ** 2,
    model_error(P, RB, E1, E).
 
 
@@ -366,36 +396,38 @@ galg(Fitness_Pred, Gene_Map, Fitness_Plot, Fittest_Genes) :-
    length(Gene_Map, Number_Of_Genes),
    Chromosome_Length is Number_Of_Genes * C.chromosome_length,
    initial_population(C.population_size, Chromosome_Length, Initial_Population),
-   galg_1(0, C.max_generations, C.mutation_rate, C.chromosome_length, Gene_Map, Fitness_Pred, Fitness_Plot, Initial_Population, _, Fittest_Genes).
+   galg_1(0, C.max_generations, C.mutation_rate, C.chromosome_length, C.population_size, Gene_Map, Fitness_Pred, Fitness_Plot, Initial_Population, _, Fittest_Genes).
 
 
 %! galg_1(+Generation, +Max_Generations, +Mutation_Rate,
-%!        +Chromosome_Length, +Gene_Map, +Fitness_Pred, +Fitness_Plot,
-%!        +Population_In, -Population_Out, -Fittest_Genes) is det.
+%!        +Chromosome_Length, +Population_Size, +Gene_Map,
+%!        +Fitness_Pred, +Fitness_Plot, +Population_In, -Population_Out,
+%!        -Fittest_Genes) is det.
 %
 %  A Population is a list of individual(Fitness, Chromosome) terms where
 %  Chromosome is a list of bits which in turn are a concatenation of
 %  fixed width lists of bits (coded genes).
 
-:- det(galg_1/10).
+:- det(galg_1/11).
 
-galg_1(Generation, Max_Generations, _, _, Gene_Map, _, _, P0, P1, Fittest_Genes) :-
+galg_1(Generation, Max_Generations, _, _, _, Gene_Map, _, _, P0, P1, Fittest_Genes) :-
    Generation >= Max_Generations,
    !,
    sort(1, @>=, P0, [individual(_, Fittest_Chromosome)|_]),
    P1 = P0,
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes).
-galg_1(G, Max_Generations, Mutation_Rate, Chromosome_Length, Gene_Map, Fitness_Pred, Fitness_Plot, P0, Population_Out, Fittest_Genes) :-
+galg_1(G, Max_Generations, Mutation_Rate, Chromosome_Length, Population_Size, Gene_Map, Fitness_Pred, Fitness_Plot, P0, P5, Fittest_Genes) :-
+   assertion((length(P0, N), N == Population_Size)),
    update_fitness(P0, Fitness_Pred, Fitness_Plot, Gene_Map, P1),
    max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P1),
-   writeln(G-f(Best_Fitness_Of_Generation)),
+   % writeln(G-f(Best_Fitness_Of_Generation)),
    in_pce_thread(send(Fitness_Plot, append, G, Best_Fitness_Of_Generation)),
    reproduce(P1, P2),
    phrase(swap_genes(P2, Chromosome_Length), P3),
    mutate(P3, Mutation_Rate, P4),
    !,  % Green cut
    GG is G + 1,
-   galg_1(GG, Max_Generations, Mutation_Rate, Chromosome_Length, Gene_Map, Fitness_Pred, Fitness_Plot, P4, Population_Out, Fittest_Genes).
+   galg_1(GG, Max_Generations, Mutation_Rate, Chromosome_Length, Population_Size, Gene_Map, Fitness_Pred, Fitness_Plot, P4, P5, Fittest_Genes).
 
 
 %! fitness_order(+A, +B) is semidet.
