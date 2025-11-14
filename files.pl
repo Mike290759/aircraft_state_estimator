@@ -7,4 +7,5 @@ user:file_search_path(src, './src').
 user:file_search_path(dat, '.').
 
 :- use_module(src(flightgear)).
+:- use_module(src(bisection)).
 :- use_module(src(spi)).
