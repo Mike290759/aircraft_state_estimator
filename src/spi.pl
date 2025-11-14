@@ -63,7 +63,10 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
    galg(2, +, +, -),
    galg_1(+, +, +, +, +, +, 2, +, +, -, -),
    fitness(+, 2, +, +, -),
-   fitness_1(+, 2, +, +, -).
+   fitness_1(+, 2, +, +, -),
+   bisection(2, +, +, +, -),
+   bisection_1(2, +, +, +, +, +, -).
+
 
 %:- set_prolog_flag(optimise, true).
 
@@ -71,7 +74,8 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 
 galg_config(galg_config{num_gene_bits: 16,
                         population_size: 100,
-                        max_generations: 500,
+                        max_generations: 100,
+                        fittest_individual_retention_factor: 0.15,  % Ensure the fittest individual is this proportion of the next generation
                         mutation_rate: 0.01}).
 
 
@@ -81,7 +85,7 @@ user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(10, Fitness_Plot),
-   RL = 1.3,
+   RL = 1.5,
    Gene_Map = [gene(sample_time, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL)],
    points_to_rb_tree(Measured_OLSR, Measured_OLSR_Segments),
    galg(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration), Gene_Map, Fitness_Plot, Fittest_Genes),
@@ -397,7 +401,7 @@ galg(Fitness_Pred, Gene_Map, Fitness_Plot, Fittest_Genes) :-
 
 
 %! galg_1(+Generation, +Max_Generations, +Mutation_Rate,
-%!        +Chromosome_Length, +Population_Size, +Gene_Map,
+%!        +Population_Size, +Num_Gene_Bits, +Gene_Map,
 %!        +Fitness_Pred, +Fitness_Plot, +Population_In, -Population_Out,
 %!        -Fittest_Genes) is det.
 %
@@ -416,7 +420,7 @@ galg_1(G, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_M
    assertion((length(P0, N), N == Population_Size)),
    update_fitness(P0, Gene_Map, Fitness_Pred, Fitness_Plot, P1),
    max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P1),
-   % writeln(G-f(Best_Fitness_Of_Generation)),
+   % writeln(G-f(Worst_Fitness_Of_Generation, Best_Fitness_Of_Generation)),
    in_pce_thread(send(Fitness_Plot, append, G, Best_Fitness_Of_Generation)),
    reproduce(P1, P2),
    phrase(swap_genes(P2, Num_Gene_Bits), P3),
@@ -497,7 +501,29 @@ chromosome_gene_values([g(Gene_ID, Gene_Bits)|Genes], [gene(Gene_ID, Lower_Limit
 
 %! reproduce(+Population, -New_Population) is det.
 %
-%  Reproduce in proportion to fitness
+%  Order the individuals by descending fitness then
+%  reproduce according to a decating exponential function so that the
+%  fittest are reproduced at a significantly greater rate than less fit
+%  individuals.
+%
+%  If the position of an individual in the ordered list is I where I is
+%  in the range [0, N-1] where N is the population size,
+%  the replication function R(I) giving the multiplier for the number of
+%  copies of the individual at position I to be made is:
+%
+%  R(I) = N * R1 * exp(-R2 * I/N)
+%
+%  where R1 and R2 are constants
+%
+%  To calculate R1, set I=0 and choose the replication factor for the
+%  fittest individual, say 15%, then:
+%
+%  0.15 = R1 * exp(0), so R1 = 0.15
+%
+%  Determining is a bit more complicated: the sum of R(I) over I=0..N
+%  must be N.
+
+
 
 :- det(reproduce/2).
 
@@ -543,6 +569,21 @@ clones(N, Individual) -->
    clones(NN, Individual).
 
 
+% total_reproduced(+R2, -Sigma_N) is det.
+
+total_reproduced(R2, Sigma_N) :-
+   galg_config(C),
+   N_Max is C.population_size-1,
+   aggregate_all(sum(N),
+                 (   between(0, N_Max, I),
+                     reproduction_number(I, R2, N)),
+                 Sigma_N).
+
+%! reproduction_number(+I, +R2, -N) is det.
+
+reproduction_number(I, R2, N) :-
+   galg_config(C),
+   N is integer(C.population_size * C.fittest_individual_replication_factor * exp(-R2 * I/C.population_size)).
 
 %! total_fitness(+Population, +Accum, -Total_Fitness) is det.
 
@@ -762,3 +803,41 @@ test(1) :-
 
 
 :- end_tests(rb_lookup_range).
+
+
+%! bisection(+Function, +Tolerance, +X1, +X2, -Root) :-
+%
+%  X is a root of Function
+
+
+bisection(F, Tolerance, X1, X2, Root) :-
+   call(F, X1, Y1),
+   call(F, X2, Y2),
+   bisection_1(F, Tolerance, X1, Y1, X2, Y2, Root).
+
+bisection_1(_, Tolerance, X1, _, X2, _, Root) :-
+   abs(X1-X2) =< Tolerance,
+   !,
+   Root = X1.
+bisection_1(F, Tolerance, X1, Y1, X2, Y2, Root) :-
+   X is (X1 + X2) / 2,
+   call(F, X, Y),
+   (   sign(Y1) =\= sign(Y)
+   ->  bisection_1(F, Tolerance, X1, Y1, X, Y, Root)
+   ;   bisection_1(F, Tolerance, X, Y, X2, Y2, Root)
+   ).
+
+:- begin_tests(bisection).
+
+test(1) :-
+   bisection(fn, 0.001, 0, 4.0, X),
+   abs(X-1.73205) =< 0.001.
+
+test(2) :-
+   bisection(fn, 0.001, -4.0, 0.0, X),
+   abs(X+1.73205) =< 0.001.
+
+fn(X, Y) :-
+   Y is X*X - 3.
+
+:- end_tests(bisection).
