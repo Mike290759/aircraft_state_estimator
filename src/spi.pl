@@ -88,18 +88,16 @@ user:ts :-
    RL = 1.5,
    Gene_Map = [gene(sample_time, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL)],
    points_to_rb_tree(Measured_OLSR, Measured_OLSR_Segments),
-   galg(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration), Gene_Map, Fitness_Plot, Fittest_Genes),
+   galg(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration), Gene_Map, Fitness_Plot, Fittest_Individual),
+   Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
+   chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes),
    Fittest_Genes = [Model_Sample_Time, B0, B1, B2, A1, A2],
    sodt(step_input(Step_Size), Duration, Model_Sample_Time, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
-   y_values(Modelled_OLSR, Modelled_Y_Values),
-   min_member(@=<, Modelled_Min, Modelled_Y_Values),
-   max_member(@=<, Modelled_Max, Modelled_Y_Values),
-   writeln(modelled_range(Modelled_Min, Modelled_Max)),
    y_values(Measured_OLSR, Measured_Y_Values),
    min_member(@=<, Measured_Min, Measured_Y_Values),
    max_member(@=<, Measured_Max, Measured_Y_Values),
    gene_summary(Gene_Map, Fittest_Genes, Gene_Summary),
-   format(string(Title), 'sodt - ~w', [Gene_Summary]),
+   format(string(Title), 'sodt - F=~2f, ~w', [Best_Fitness, Gene_Summary]),
    new(W, auto_sized_picture(Title)),
    send(W, max_size, size(2000, 600)),
    send(W, display, new(Plotter, plotter)),
@@ -168,8 +166,6 @@ gene_summary_2(Gene_ID, V) -->
    "=",
    {format(codes(Codes), '~2f', [V])},
    Codes.
-
-
 
 
 %! measured_open_loop_step_response(+File_Name, +Duration, -Sample_Time,
@@ -403,31 +399,30 @@ galg(Fitness_Pred, Gene_Map, Fitness_Plot, Fittest_Genes) :-
 %! galg_1(+Generation, +Max_Generations, +Mutation_Rate,
 %!        +Population_Size, +Num_Gene_Bits, +Gene_Map,
 %!        +Fitness_Pred, +Fitness_Plot, +Population_In, -Population_Out,
-%!        -Fittest_Genes) is det.
+%!        -Fittest_Individual) is det.
 %
 %  A Population is a list of individual(Fitness, Chromosome) terms where
 %  Chromosome is a list of g(Gene_ID, Gene_Bits).
 
 :- det(galg_1/11).
 
-galg_1(Generation, Max_Generations, _, _, _, Gene_Map, _, _, P0, P1, Fittest_Genes) :-
+galg_1(Generation, Max_Generations, _, _, _, _, _, _, P0, P1, Fittest_Individual) :-
    Generation >= Max_Generations,
    !,
-   sort(1, @>=, P0, [individual(_, Fittest_Chromosome)|_]),
-   P1 = P0,
-   chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes).
-galg_1(G, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_Map, Fitness_Pred, Fitness_Plot, P0, P5, Fittest_Genes) :-
+   sort(1, @>=, P0, [Fittest_Individual|_]),
+   P1 = P0.
+galg_1(G, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_Map, Fitness_Pred, Fitness_Plot, P0, P5, Fittest_Individual) :-
    assertion((length(P0, N), N == Population_Size)),
-   update_fitness(P0, Gene_Map, Fitness_Pred, Fitness_Plot, P1),
-   max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P1),
+   swap_genes(P0, Num_Gene_Bits, P1),
+   mutate(P1, Mutation_Rate, P2),
+   update_fitness(P2, Gene_Map, Fitness_Pred, Fitness_Plot, P3),
+   max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P3),
    % writeln(G-f(Worst_Fitness_Of_Generation, Best_Fitness_Of_Generation)),
    in_pce_thread(send(Fitness_Plot, append, G, Best_Fitness_Of_Generation)),
-   reproduce(P1, P2),
-   phrase(swap_genes(P2, Num_Gene_Bits), P3),
-   mutate(P3, Mutation_Rate, P4),
+   reproduce(P3, P4),
    !,  % Green cut
    GG is G + 1,
-   galg_1(GG, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_Map, Fitness_Pred, Fitness_Plot, P4, P5, Fittest_Genes).
+   galg_1(GG, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_Map, Fitness_Pred, Fitness_Plot, P4, P5, Fittest_Individual).
 
 
 %! fitness_order(+A, +B) is semidet.
@@ -444,20 +439,17 @@ fitness_order(individual(F1, _), individual(F2, _)) :-
 initial_population(0, _, _, []) :-
    !.
 initial_population(N, Gene_Map, Num_Gene_Bits, [individual(_, Chromosome)|P]) :-
-   phrase(initial_chromosome(Gene_Map, Num_Gene_Bits), Chromosome),
+   initial_chromosome(Gene_Map, Num_Gene_Bits, Chromosome),
    NN is N - 1,
    initial_population(NN, Gene_Map, Num_Gene_Bits, P).
 
 
-%! initial_chromosome(+Gene_Map, +Num_Gene_Bits) // is det.
+%! initial_chromosome(+Gene_Map, +Num_Gene_Bits, -Chromosome) // is det.
 
-initial_chromosome([], _) -->
-   [].
-initial_chromosome([gene(Gene_ID, _, _)|M], Num_Gene_Bits) -->
-   {  initial_gene_bits(Num_Gene_Bits, Gene_Bits)
-   },
-   [g(Gene_ID, Gene_Bits)],
-   initial_chromosome(M, Num_Gene_Bits).
+initial_chromosome([], _, []).
+initial_chromosome([gene(Gene_ID, _, _)|M], Num_Gene_Bits, [g(Gene_ID, Gene_Bits)|C]) :-
+   initial_gene_bits(Num_Gene_Bits, Gene_Bits),
+   initial_chromosome(M, Num_Gene_Bits, C).
 
 
 
@@ -524,13 +516,18 @@ chromosome_gene_values([g(Gene_ID, Gene_Bits)|Genes], [gene(Gene_ID, Lower_Limit
 %  must be N so that the population size remains the same. R2 is found
 %  by applying the bisection method.
 
-%! reproduction_number(+I, +R2, -N) is det.
+%! reproduction_number(+I, +R2, -Number_Of_Clones_Required) is semidet.
 %
-%  N is the number of clones of individual at fitness rank I
+%  N is the number of clones of the individual at fitness rank I to make
+%  Fails if none are required
+%
+%  @arg I is the fitness rank of the individual. 0..N
+%  @arg Number_Of_Clones_Required is the number of clones of individual at fitness rank I.
 
-reproduction_number(I, R2, N) :-
+reproduction_number(I, R2, Number_Of_Clones_Required) :-
    galg_config(C),
-   N is integer(C.population_size * C.r1 * exp(-R2 * I/C.population_size)).
+   Number_Of_Clones_Required is integer(C.population_size * C.r1 * exp(-R2 * I/C.population_size)),
+   Number_Of_Clones_Required > 0.
 
 
 % reproduction_population_error(+R2, -Error) is det.
@@ -571,33 +568,37 @@ cache_r2 :-
 reproduce(P0, P2) :-
    sort(1, @>=, P0, P1),
    galg_config(C),
-   phrase(reproduce_1(P1, Total_Fitness, 0, C.population_size), P2).
+   phrase(reproduce_1(P1, 0, C.population_size), P2).
 
 
-%! reproduce_1(+Population, +Total_Fitness, +Population_Count,
-%!             +Population_Size) // is det.
+%! reproduce_1(+Population, +I, +N) // is det.
+%
+%  @arg Population in reducing fitness order
+%  @arg I fitness rank 0..N
+%  @arg N the number still required to make up the population
 
-reproduce_1(_, _, N, Population_Size) -->
-   { N >= Population_Size,
-     !
-   },
+reproduce_1(_, _, 0) -->
+   !,
    [].
-reproduce_1([individual(Fitness, Chromosome)|T], Total_Fitness, N, Population_Size) -->
-   { Number_Required is integer(Population_Size * Fitness/Total_Fitness),
-     Number_Required > 0,
+reproduce_1([individual(Fitness, Chromosome)|T], I, N) -->
+   { r2(R2),
+     reproduction_number(I, R2, Number_Of_Clones_Required),
+     NN is N - Number_Of_Clones_Required,
+     NN >= 0,
      !,
-     NN is N + Number_Required
+     II is I + 1
    },
-   clones(Number_Required, individual(Fitness, Chromosome)),
-   reproduce_1(T, Total_Fitness, NN, Population_Size).
-reproduce_1([Individual|T], Total_Fitness, N, Population_Size) -->
+   clones(Number_Of_Clones_Required, individual(Fitness, Chromosome)),
+   reproduce_1(T, II, NN).
+reproduce_1([Individual|T], I, N) -->
    [Individual],
-   { NN is N + 1
+   { II is I + 1,
+     NN is N - 1
    },
-   reproduce_1(T, Total_Fitness, NN, Population_Size).
+   reproduce_1(T, II, NN).
 
 
-%! clones(+Number_Required, +Individual) // is det.
+%! clones(+Number_Of_Clones_Required, +Individual) // is det.
 
 clones(0, _) -->
    !,
@@ -610,20 +611,17 @@ clones(N, Individual) -->
 
 
 
-%! swap_genes(+Population, +Num_Gene_Bits) // is det.
+%! swap_genes(+Population, +Num_Gene_Bits, -New_Population) is det.
 
-:- det(swap_genes//2).
+:- det(swap_genes/3).
 
-swap_genes([], _) -->
-   !,
-   [].
-swap_genes(P0, Num_Gene_Bits) -->
-   { random_select(individual(_, C1), P0, P1),
-     random_select(individual(_, C2), P1, P2),
-     swap_gene_bits(Num_Gene_Bits, C1, C2, C3, C4)
-   },
-   [individual(_, C3), individual(_, C4)],
-   swap_genes(P2, Num_Gene_Bits).
+swap_genes([], _, []) :-
+   !.
+swap_genes(P0, Num_Gene_Bits, [individual(_, C3), individual(_, C4)|P]) :-
+   random_select(individual(_, C1), P0, P1),
+   random_select(individual(_, C2), P1, P2),
+   swap_gene_bits(Num_Gene_Bits, C1, C2, C3, C4),
+   swap_genes(P2, Num_Gene_Bits, P).
 
 
 %!   swap_gene_bits(+Num_Gene_Bits, +Chromosome_1, +Chromosome_2,
