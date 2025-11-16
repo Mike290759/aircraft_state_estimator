@@ -60,12 +60,14 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 :- use_module(library(aggregate), [aggregate_all/3]).
 
 :- meta_predicate
-   sodt(2, +, +, +, +, +, +, +, +, -),
-   sodt_1(+, 2, +, +, +, +, +, +, +, +, +, +, -),
+   sodt(+, +, +, +, +, +, +, -),
+   sodt_1(+, +, +, +, +, +, +, +, +, +, +, -),
+   transfer_function(2, +, +, +, +, +, +, +, +, -),
    galg(2, +, +, -),
    galg_1(+, +, +, +, +, +, 2, +, +, -, -),
    fitness(+, 2, +, +, -),
-   fitness_1(+, 2, +, +, -).
+   fitness_1(+, 2, +, +, -),
+   gen_x(2, +, +, -, -).
 
 
 %:- set_prolog_flag(optimise, true).
@@ -73,9 +75,9 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 %! galg_config(-Dict) is det.
 
 galg_config(galg_config{num_gene_bits: 16,
-                        population_size: 100,
-                        max_generations: 100,
-                        r1: 0.15,              % Ensure the fittest individual is this proportion of the next generation
+                        population_size: 500,
+                        max_generations: 20,
+                        r1: 0.20,              % Ensure the fittest individual is this proportion of the next generation
                         mutation_rate: 0.01}).
 
 
@@ -84,7 +86,7 @@ galg_config(galg_config{num_gene_bits: 16,
 user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
-   fitness_progress_graph(10, Fitness_Plot),
+   fitness_progress_graph(1.0, Fitness_Plot),
    RL = 1.5,
    Gene_Map = [gene(sample_time, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL)],
    points_to_rb_tree(Measured_OLSR, Measured_OLSR_Segments),
@@ -92,12 +94,12 @@ user:ts :-
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes),
    Fittest_Genes = [Model_Sample_Time, B0, B1, B2, A1, A2],
-   sodt(step_input(Step_Size), Duration, Model_Sample_Time, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
+   transfer_function(step_input(Step_Size), Duration, Model_Sample_Time, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
    y_values(Measured_OLSR, Measured_Y_Values),
    min_member(@=<, Measured_Min, Measured_Y_Values),
    max_member(@=<, Measured_Max, Measured_Y_Values),
    gene_summary(Gene_Map, Fittest_Genes, Gene_Summary),
-   format(string(Title), 'sodt - F=~2f, ~w', [Best_Fitness, Gene_Summary]),
+   format(string(Title), 'F=~2f, ~w', [Best_Fitness, Gene_Summary]),
    new(W, auto_sized_picture(Title)),
    send(W, max_size, size(2000, 600)),
    send(W, display, new(Plotter, plotter)),
@@ -279,46 +281,46 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
    y_values(T1, T2).
 
 
-%!  sodt(+X_Pred, +Duration, +Sample_Time, +B0, +B1, +B2,
-%!       +A0, +A1, +A2, -Points) is det.
+%! transfer_function(+X_Pred, +Duration, +Time_Step, +B0, +B1, +B2,
+%!                   +A0, +A1, +A2, -Points) is det.
+
+transfer_function(X_Pred, Duration, Time_Step, B0, B1, B2, A0, A1, A2, Y_Points) :-
+   findall(p(T, X), gen_x(X_Pred, Duration, Time_Step, T, X), X_Points),
+   sodt(X_Points, B0, B1, B2, A0, A1, A2, Y_Points).
+
+
+%! gen_x(+X_Pred, +Duration, +Time_Step, -T, -X) is nondet.
+
+gen_x(X_Pred, Duration, Time_Step, T, X) :-
+    N is integer(Duration/Time_Step),
+    NN is N -1,
+    between(0, NN, I),
+    T is I * Time_Step,
+    call(X_Pred, T, X).
+
+
+%! sodt(+X_Points, +B0, +B1, +B2, +A0, +A1, +A2, -Y_Points) is det.
 %
-%  Generate a time series of N inputs (X values) by passing T
-%  through X_Pred and pass them through a second-order linear discrete
-%  filter (direct form II transposed).
+%  Second-order linear discrete transfer functionfilter (direct form II
+%  transposed).
 %
 %  The general difference equation for a second-order filter is:
 %
 %  a0.y[n]=b0.x[n]+b1.x[n-1]+b2.x[n-2]-a1.y[n-1]-a2.y[n-2]
+%
+%  Rewriting the Python difference equations below gives:
+%
+%  y[n] = b0*x[n] + b1*x[n-1] - a1*y[n-1] + b2*x[n-2] - a2*y[n-2]
+%  i.e. the same as above
 %
 %  Assumes A0 is normalized to 1.
 %
 %  B0, B1, B2 are the numerator coefficients
 %  A0, A1, A2 are the denominator coefficients
 %
-%  Reference
-%  https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter.html
+%  For reference here is a Python implementation:
 %
-%  @arg N series length
-%  @arg X_Pred closure foo(..., Time, X)
-%  @arg Points RB-tree where key = T
-%
-:- det(sodt/10).
-
-sodt(X_Pred, Duration, Sample_Time, B0, B1, B2, A0, A1, A2, P) :-
-   assertion(A0 == 1),
-   Time_Step = Sample_Time,
-   N is integer(Duration/Sample_Time),
-   D1 = 0,
-   D2 = 0,
-   sodt_1(N, X_Pred, 0, Time_Step, D1, D2, B0, B1, B2, A0, A1, A2, P).
-
-
-%!  sodt_1(+K, +X_Pred, +Time, +Time_Step, +D1, +D2, +B0, +B1,
-%!         +B2, +A0, +A1, +A2, -Points) is det.
-%
-% From Python implementation:
-%
-% Difference equations for Direct Form II Transposed (second order)
+%  Difference equations for Direct Form II Transposed (second order)
 %    y[n] = b0*x[n] + d1[n-1]
 %    d1[n] = b1*x[n] - a1*y[n] + d2[n-1]
 %    d2[n] = b2*x[n] - a2*y[n]
@@ -327,19 +329,25 @@ sodt(X_Pred, Duration, Sample_Time, B0, B1, B2, A0, A1, A2, P) :-
 %        y[n] = b[0] * x[n] + d1
 %        d1 = b[1] * x[n] - a[1] * y[n] + d2
 %        d2 = b[2] * x[n] - a[2] * y[n]
+%
+%  Reference
+%  https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter.html
+%
+%  @arg X_Points list of p(T, X)
+%  @arg Y_Points list of p(T, Y)
 
-:- det(sodt_1/13).
+:- det(sodt/8).
 
-sodt_1(0, _, _, _, _, _, _, _, _, _, _, _, []) :-
-   !.
-sodt_1(K, X_Pred, T, Time_Step, D1, D2, B0, B1, B2, A0, A1, A2, [p(T, Y)|P]) :-
-   call(X_Pred, T, X),
-   Y is B0 * X + D1,
-   D1_New is B1 * X - A1 * Y + D2,
-   D2_New is B2 * X - A2 * Y,
-   KK is K-1,
-   T_Next is T + Time_Step,
-   sodt_1(KK, X_Pred, T_Next, Time_Step, D1_New, D2_New, B0, B1, B2, A0, A1, A2, P).
+sodt(X_Points, B0, B1, B2, A0, A1, A2, Y_Points) :-
+   assertion(A0 == 1),
+   X_Points = [p(_, X2), p(_, X1)|_],
+   sodt_1(X_Points, X2, X1, 0, 0, B0, B1, B2, A0, A1, A2, Y_Points).
+
+sodt_1([], _, _, _, _, _, _, _, _, _, _, []).
+sodt_1([p(T, X)|P1], X2, X1, Y2, Y1, B0, B1, B2, A0, A1, A2, [p(T, Y)|P2]) :-
+   Y is B0 * X + B1 * X1 - A1 * Y1 + B2 * X2 - A2 * Y2,
+   sodt_1(P1, X1, X, Y1, Y, B0, B1, B2, A0, A1, A2, P2).
+
 
 
 %! fitness(+Measured_Open_Loop_Step_Response_Segments, +X_Pred,
@@ -364,7 +372,7 @@ fitness(Measured_OLSR_Segments, X_Pred, Duration, Gene_Values, Fitness) :-
 %!           -Fitness) is det.
 
 fitness_1(Measured_OLSR_Segments, X_Pred, Duration, [Sample_Time, B0, B1, B2, A1, A2], Fitness) :-
-   sodt(X_Pred, Duration, Sample_Time, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
+   transfer_function(X_Pred, Duration, Sample_Time, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
    model_error(Modelled_OLSR, Measured_OLSR_Segments, 0, Model_Error),
    Fitness is 1 / Model_Error.
 
@@ -377,7 +385,10 @@ fitness_1(Measured_OLSR_Segments, X_Pred, Duration, [Sample_Time, B0, B1, B2, A1
 
 model_error([], _, Error, Error).
 model_error([p(T, V_Modelled)|P], RB, E0, E) :-
-   rb_lookup_range(T, _, V_Measured, RB),
+   (   rb_lookup_range(T, _, V, RB)
+   ->  V_Measured = V
+   ;   throw(no_olsr_segment(T))
+   ),
    E1 is E0 + (V_Modelled-V_Measured) ** 2,
    model_error(P, RB, E1, E).
 
@@ -682,7 +693,7 @@ flip_bit(0, 1).
 flip_bit(1, 0).
 
 
-%! step_input(+Step_Size, -X) is det.
+%! step_input(+Step_Size, +T, -X) is det.
 %
 %  Generate the step input for all time >= T=0
 
