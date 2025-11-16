@@ -62,11 +62,11 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 :- meta_predicate
    fitness(+, 2, +, +, +, -),
    fitness_1(+, 2, +, +, +, -),
-   galg(2, +, +, -),
-   galg_1(+, +, +, +, +, +, 2, +, +, -, -),
+   gen_alg_optimise(2, +, +, -),
+   gen_alg_optimise_1(+, +, +, +, +, +, 2, +, +, -, -),
    gen_x(2, +, +, -, -),
    model(+, +, +, +, +, +, -),
-   transfer_function(2, +, +, 2, -),
+   transfer_function(2, +, +, +, -),
    transfer_function_1(+, 6, +, -).
 
 
@@ -111,7 +111,7 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 :- det(model/7).
 
 model(G, X2, X1, Y2, Y1, X, Y) :-
-   Y is G.b0 * X + G.b1 * X1 - G.a1 * Y1 + G.b2 * X2 - G.a * Y2.
+   Y is G.b0 * X + G.b1 * X1 - G.a1 * Y1 + G.b2 * X2 - G.a2 * Y2.
 
 
 
@@ -120,15 +120,13 @@ model(G, X2, X1, Y2, Y1, X, Y) :-
 galg_config(galg_config{num_gene_bits: 16,
                         population_size: 500,
                         max_generations: 20,
-                        r1: 0.20,              % Ensure the fittest individual is this proportion of the next generation
+                        r1: 0.20,              % The fittest individual is this proportion of the next generation
                         mutation_rate: 0.01}).
 
 
 %  T E S T
 
 %!  ts is semidet.
-
-% TBD Convert sample_time to time_step
 
 user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
@@ -137,82 +135,39 @@ user:ts :-
    RL = 1.5,
    Gene_Map = [gene(time_step, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL)],
    points_to_rb_tree(Measured_OLSR, Measured_OLSR_Segments),
-   galg(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration, model), Gene_Map, Fitness_Plot, Fittest_Individual),
+   gen_alg_optimise(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration, model), Gene_Map, Fitness_Plot, Fittest_Individual),
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes),
    transfer_function(step_input(Step_Size), Duration, model, Fittest_Genes, Modelled_OLSR),
-   y_values(Measured_OLSR, Measured_Y_Values),
-   min_member(@=<, Measured_Min, Measured_Y_Values),
-   max_member(@=<, Measured_Max, Measured_Y_Values),
-   gene_summary(Gene_Map, Fittest_Genes, Gene_Summary),
-   format(string(Title), 'F=~2f, ~w', [Best_Fitness, Gene_Summary]),
-   new(W, auto_sized_picture(Title)),
-   send(W, max_size, size(2000, 600)),
-   send(W, display, new(Plotter, plotter)),
-   send(Plotter, axis, plot_axis(x, 0.0, Duration, @(default), 1500)),
-   send(Plotter, axis, plot_axis(y, Measured_Min, Measured_Max, @(default), 400)),
-   send(Plotter, graph, new(Blue_Plot, plot_graph)),
-   send(Blue_Plot, colour, blue),
-   send(Plotter, graph, new(Black_Plot, plot_graph)),
-   send(Black_Plot, colour, black),
-   legend([item('Measured Open Loop Step Response', black), item('Modelled Open Loop Step Response', blue)], Plotter, 30, 80),
-   send(W, open),
-   forall(member(p(T, V), Modelled_OLSR), send(Blue_Plot, append, T, V)),
-   forall(member(p(T, V), Measured_OLSR), send(Black_Plot, append, T, V)),
-   fail.
+   plot_measured_and_modelled(Gene_Map, Fittest_Genes, Best_Fitness, Duration, Measured_OLSR, Modelled_OLSR).
 
 
-%! legend(+Items, +Plotter, +Y, +Spacing) is det.
+%! gene_summary(+Gene_Map, +Gene_Values:dict, -Gene_Summary:string) is
+%!              det.
 
-legend(Items, Plotter, Y, Spacing) :-
-   get(Plotter, width, Plotter_Width),
-   legend_1(Items, Plotter, X_Left, Y, Spacing, 0, Total_Width),
-   Left_Margin in 0..Total_Width,
-   Right_Margin in 0..Total_Width,
-   Left_Margin = X_Left,
-   Slop in 0..1,         % Because Plotter_Width - Total_Width may be odd
-   Right_Margin #= Left_Margin + Slop,
-   Left_Margin + Total_Width + Right_Margin #= Plotter_Width,  % Center the legend
-   once(labeling([min(Slop)], [Slop, Left_Margin, Right_Margin])).
-
-
-legend_1([], _, _, _, _, W, W).
-legend_1([item(Legend_Text, Colour)|T], Plotter, X, Y, Spacing, Width, Total_Width) :-
-   format(atom(Prefixed_Text), '--------- ~w', [Legend_Text]),
-   new(Text, text(Prefixed_Text)),
-   send(Text, colour, Colour),
-   get(Text, width, Text_Width),
-   freeze(X, send(Plotter, display, Text, point(X, Y))),
-   Next_X #= X + Text_Width + Spacing,
-   New_Width #= Width + Text_Width + Spacing,
-   legend_1(T, Plotter, Next_X, Y, Spacing, New_Width, Total_Width).
-
-
-%! gene_summary(+Gene_Map, +Genes, -Gene_Summary:string) is det.
-
-gene_summary(Gene_Map, Fittest_Genes, Gene_Summary) :-
-   phrase(gene_summary_1(Gene_Map, Fittest_Genes), Codes),
+gene_summary(Gene_Map, Gene_Values, Gene_Summary) :-
+   phrase(gene_summary_1(Gene_Map, Gene_Values), Codes),
    string_codes(Gene_Summary, Codes).
 
 
-%! gene_summary_1(+Gene_Map, +Genes) is det.
+%! gene_summary_1(+Gene_Map, +Gene_Values) is det.
 
-gene_summary_1([gene(Gene_ID, _, _)], [V]) -->
+gene_summary_1([gene(Gene_ID, _, _)], Gene_Values) -->
    !,
-   gene_summary_2(Gene_ID, V).
+   gene_summary_2(Gene_ID, Gene_Values).
 
-gene_summary_1([gene(Gene_ID, _, _)|Gene_Map], [V|T]) -->
-   gene_summary_2(Gene_ID, V),
+gene_summary_1([gene(Gene_ID, _, _)|Gene_Map], Gene_Values) -->
+   gene_summary_2(Gene_ID, Gene_Values),
    ", ",
-   gene_summary_1(Gene_Map, T).
+   gene_summary_1(Gene_Map, Gene_Values).
 
 
-%! gene_summary_2(+Gene_ID, +V) is det.
+%! gene_summary_2(+Gene_ID, +Gene_Values) is det.
 
-gene_summary_2(Gene_ID, V) -->
+gene_summary_2(Gene_ID, GV) -->
    atom(Gene_ID),
    "=",
-   {format(codes(Codes), '~2f', [V])},
+   {format(codes(Codes), '~2f', [GV.Gene_ID])},
    Codes.
 
 
@@ -333,7 +288,6 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
 %  Evaluate the fitness of a set gene values. The higher the fitness the
 %  better.
 %
-%  @arg Gene_Values list of gene(Gene_ID, Value)
 %  @arg Duration the number of seconds of Measured_Open_Loop_Step_Response_RB that we are attempting to model
 
 :- det(fitness/6).
@@ -403,35 +357,35 @@ model_error([p(T, V_Modelled)|P], RB, E0, E) :-
 
 
 
-%!  galg(+Fitness_Pred, +Gene_Map, +Fitness_Plot, -Fittest_Genes) is
+%!  gen_alg_optimise(+Fitness_Pred, +Gene_Map, +Fitness_Plot, -Fittest_Genes) is
 %!       det.
 %
 %  Gene_Map list of gene(Gene_Name, Lower_Limit, Upper_Limit)
 
-:- det(galg/4).
+:- det(gen_alg_optimise/4).
 
-galg(Fitness_Pred, Gene_Map, Fitness_Plot, Fittest_Genes) :-
+gen_alg_optimise(Fitness_Pred, Gene_Map, Fitness_Plot, Fittest_Genes) :-
    galg_config(C),
    initial_population(C.population_size, Gene_Map, C.num_gene_bits, Initial_Population),
-   galg_1(0, C.max_generations, C.mutation_rate, C.population_size, C.num_gene_bits, Gene_Map, Fitness_Pred, Fitness_Plot, Initial_Population, _, Fittest_Genes).
+   gen_alg_optimise_1(0, C.max_generations, C.mutation_rate, C.population_size, C.num_gene_bits, Gene_Map, Fitness_Pred, Fitness_Plot, Initial_Population, _, Fittest_Genes).
 
 
-%! galg_1(+Generation, +Max_Generations, +Mutation_Rate,
-%!        +Population_Size, +Num_Gene_Bits, +Gene_Map,
-%!        +Fitness_Pred, +Fitness_Plot, +Population_In, -Population_Out,
-%!        -Fittest_Individual) is det.
+%! gen_alg_optimise_1(+Generation, +Max_Generations, +Mutation_Rate,
+%!                    +Population_Size, +Num_Gene_Bits, +Gene_Map,
+%!                    +Fitness_Pred, +Fitness_Plot, +Population_In,
+%!                    -Population_Out, -Fittest_Individual) is det.
 %
 %  A Population is a list of individual(Fitness, Chromosome) terms where
 %  Chromosome is a list of g(Gene_ID, Gene_Bits).
 
-:- det(galg_1/11).
+:- det(gen_alg_optimise_1/11).
 
-galg_1(Generation, Max_Generations, _, _, _, _, _, _, P0, P1, Fittest_Individual) :-
+gen_alg_optimise_1(Generation, Max_Generations, _, _, _, _, _, _, P0, P1, Fittest_Individual) :-
    Generation >= Max_Generations,
    !,
    sort(1, @>=, P0, [Fittest_Individual|_]),
    P1 = P0.
-galg_1(G, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_Map, Fitness_Pred, Fitness_Plot, P0, P5, Fittest_Individual) :-
+gen_alg_optimise_1(G, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_Map, Fitness_Pred, Fitness_Plot, P0, P5, Fittest_Individual) :-
    assertion((length(P0, N), N == Population_Size)),
    swap_genes(P0, Num_Gene_Bits, P1),
    mutate(P1, Mutation_Rate, P2),
@@ -442,7 +396,7 @@ galg_1(G, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_M
    reproduce(P3, P4),
    !,  % Green cut
    GG is G + 1,
-   galg_1(GG, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_Map, Fitness_Pred, Fitness_Plot, P4, P5, Fittest_Individual).
+   gen_alg_optimise_1(GG, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_Map, Fitness_Pred, Fitness_Plot, P4, P5, Fittest_Individual).
 
 
 %! fitness_order(+A, +B) is semidet.
@@ -500,23 +454,23 @@ update_fitness([individual(_, Chromosome)|P1], Gene_Map, Fitness_Pred, Fitness_P
 
 %! chromosome_gene_values(+Chromosome, +Gene_Map, -Gene_Values:dict) is det.
 %
-%  @arg Gene_Values list of name-value pairs
+%  @arg Gene_Values dict Gene application values
+
+:- det(chromosome_gene_values/3).
 
 chromosome_gene_values(Chromosome, Gene_Map, Gene_Values) :-
-   chromosome_gene_values(Chromosome, Gene_Map, gene_values{}, Gene_Values).
+   dict_create(GV, gene_values, []),
+   chromosome_gene_values(Chromosome, Gene_Map, GV, Gene_Values).
 
 
 %! chromosome_gene_values(+Chromosome, +Gene_Map, +Gene_Values:dict, -Gene_Values:dict) is det.
-%
-%  @arg Gene_Values list of name-value pairs
-
-:- det(chromosome_gene_values/4).
 
 chromosome_gene_values([], _, GV, GV) :-
    !.
-chromosome_gene_values([g(Gene_ID, Gene_Bits, Value)|Genes], [gene(Gene_ID, Lower_Limit, Upper_Limit)|Gene_Map], GV0, GV) :-
+chromosome_gene_values([g(Gene_ID, Gene_Bits)|Genes], [gene(Gene_ID, Lower_Limit, Upper_Limit)|Gene_Map], GV0, GV) :-
    gene_bits_to_value(Gene_Bits, Lower_Limit, Upper_Limit, Value),
-   chromosome_gene_values(Genes, Gene_Map, GV0.put(Gene_ID, Value), GV).
+   GV1 = GV0.put([Gene_ID-Value]),
+   chromosome_gene_values(Genes, Gene_Map, GV1, GV).
 
 
 %  R E P R O D U C T I O N
@@ -774,6 +728,58 @@ fitness_progress_graph(Y_Scale_Max, Plot) :-
     send(W, open).
 
 
+%! plot_measured_and_modelled(+Best_Fitness,
+%                             +Duration, +Measured_OLSR,
+%                             +Modelled_OLSR) is det.
+
+plot_measured_and_modelled(Gene_Map, Fittest_Genes, Best_Fitness, Duration, Measured_OLSR, Modelled_OLSR) :-
+   y_values(Measured_OLSR, Measured_Y_Values),
+   min_member(@=<, Measured_Min, Measured_Y_Values),
+   max_member(@=<, Measured_Max, Measured_Y_Values),
+   gene_summary(Gene_Map, Fittest_Genes, Gene_Summary),
+   format(string(Title), 'F=~2f, ~w', [Best_Fitness, Gene_Summary]),
+   new(W, auto_sized_picture(Title)),
+   send(W, max_size, size(2000, 600)),
+   send(W, display, new(Plotter, plotter)),
+   send(Plotter, axis, plot_axis(x, 0.0, Duration, @(default), 1500)),
+   send(Plotter, axis, plot_axis(y, Measured_Min, Measured_Max, @(default), 400)),
+   send(Plotter, graph, new(Blue_Plot, plot_graph)),
+   send(Blue_Plot, colour, blue),
+   send(Plotter, graph, new(Black_Plot, plot_graph)),
+   send(Black_Plot, colour, black),
+   legend([item('Measured Open Loop Step Response', black), item('Modelled Open Loop Step Response', blue)], Plotter, 30, 80),
+   send(W, open),
+   forall(member(p(T, V), Modelled_OLSR), send(Blue_Plot, append, T, V)),
+   forall(member(p(T, V), Measured_OLSR), send(Black_Plot, append, T, V)),
+   fail.
+
+
+%! legend(+Items, +Plotter, +Y, +Spacing) is det.
+
+legend(Items, Plotter, Y, Spacing) :-
+   get(Plotter, width, Plotter_Width),
+   legend_1(Items, Plotter, X_Left, Y, Spacing, 0, Total_Width),
+   Left_Margin in 0..Total_Width,
+   Right_Margin in 0..Total_Width,
+   Left_Margin = X_Left,
+   Slop in 0..1,         % Because Plotter_Width - Total_Width may be odd
+   Right_Margin #= Left_Margin + Slop,
+   Left_Margin + Total_Width + Right_Margin #= Plotter_Width,  % Center the legend
+   once(labeling([min(Slop)], [Slop, Left_Margin, Right_Margin])).
+
+
+legend_1([], _, _, _, _, W, W).
+legend_1([item(Legend_Text, Colour)|T], Plotter, X, Y, Spacing, Width, Total_Width) :-
+   format(atom(Prefixed_Text), '--------- ~w', [Legend_Text]),
+   new(Text, text(Prefixed_Text)),
+   send(Text, colour, Colour),
+   get(Text, width, Text_Width),
+   freeze(X, send(Plotter, display, Text, point(X, Y))),
+   Next_X #= X + Text_Width + Spacing,
+   New_Width #= Width + Text_Width + Spacing,
+   legend_1(T, Plotter, Next_X, Y, Spacing, New_Width, Total_Width).
+
+
 %!  points_to_rb_tree(+Points, -RB_Tree_Out) is det.
 %
 %  Represent list of points as RB-tree of time ranges and values:
@@ -846,5 +852,7 @@ test(1) :-
 
 
 :- end_tests(rb_lookup_range).
+
+
 
 
