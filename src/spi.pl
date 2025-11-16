@@ -60,17 +60,60 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 :- use_module(library(aggregate), [aggregate_all/3]).
 
 :- meta_predicate
-   sodt(+, +, +, +, +, +, +, -),
-   sodt_1(+, +, +, +, +, +, +, +, +, +, +, -),
-   transfer_function(2, +, +, +, +, +, +, +, +, -),
+   fitness(+, 2, +, +, +, -),
+   fitness_1(+, 2, +, +, +, -),
    galg(2, +, +, -),
    galg_1(+, +, +, +, +, +, 2, +, +, -, -),
-   fitness(+, 2, +, +, -),
-   fitness_1(+, 2, +, +, -),
-   gen_x(2, +, +, -, -).
+   gen_x(2, +, +, -, -),
+   model(+, +, +, +, +, +, -),
+   transfer_function(2, +, +, 2, -),
+   transfer_function_1(+, 6, +, -).
 
 
 %:- set_prolog_flag(optimise, true).
+
+%  M O D E L
+%
+%! model(+Gene_Values:dict, +X2:x[n-2], +X1:x[n-1], +Y2:y[n-2], +Y1:y[n-1], +X, -Y) is det.
+%
+%  Second-order linear discrete transfer function filter (direct form II
+%  transposed).
+%
+%  The general difference equation for a second-order filter is:
+%
+%  a0.y[n]=b0.x[n]+b1.x[n-1]+b2.x[n-2]-a1.y[n-1]-a2.y[n-2]
+%
+%  Rewriting the Python difference equations below gives:
+%
+%  y[n] = b0*x[n] + b1*x[n-1] - a1*y[n-1] + b2*x[n-2] - a2*y[n-2]
+%  i.e. the same as above
+%
+%  Assumes A0 is normalized to 1.
+%
+%  B0, B1, B2 are the numerator coefficients
+%  A0, A1, A2 are the denominator coefficients
+%
+%  For reference here is a Python implementation:
+%
+%  Difference equations for Direct Form II Transposed (second order)
+%    y[n] = b0*x[n] + d1[n-1]
+%    d1[n] = b1*x[n] - a1*y[n] + d2[n-1]
+%    d2[n] = b2*x[n] - a2*y[n]
+%
+%    for n in range(len(x)):
+%        y[n] = b[0] * x[n] + d1
+%        d1 = b[1] * x[n] - a[1] * y[n] + d2
+%        d2 = b[2] * x[n] - a[2] * y[n]
+%
+%  Reference
+%  https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter.html
+
+:- det(model/7).
+
+model(G, X2, X1, Y2, Y1, X, Y) :-
+   Y is G.b0 * X + G.b1 * X1 - G.a1 * Y1 + G.b2 * X2 - G.a * Y2.
+
+
 
 %! galg_config(-Dict) is det.
 
@@ -81,20 +124,23 @@ galg_config(galg_config{num_gene_bits: 16,
                         mutation_rate: 0.01}).
 
 
+%  T E S T
+
 %!  ts is semidet.
+
+% TBD Convert sample_time to time_step
 
 user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(1.0, Fitness_Plot),
    RL = 1.5,
-   Gene_Map = [gene(sample_time, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL)],
+   Gene_Map = [gene(time_step, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL)],
    points_to_rb_tree(Measured_OLSR, Measured_OLSR_Segments),
-   galg(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration), Gene_Map, Fitness_Plot, Fittest_Individual),
+   galg(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration, model), Gene_Map, Fitness_Plot, Fittest_Individual),
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes),
-   Fittest_Genes = [Model_Sample_Time, B0, B1, B2, A1, A2],
-   transfer_function(step_input(Step_Size), Duration, Model_Sample_Time, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
+   transfer_function(step_input(Step_Size), Duration, model, Fittest_Genes, Modelled_OLSR),
    y_values(Measured_OLSR, Measured_Y_Values),
    min_member(@=<, Measured_Min, Measured_Y_Values),
    max_member(@=<, Measured_Max, Measured_Y_Values),
@@ -281,12 +327,40 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
    y_values(T1, T2).
 
 
-%! transfer_function(+X_Pred, +Duration, +Time_Step, +B0, +B1, +B2,
-%!                   +A0, +A1, +A2, -Points) is det.
+%! fitness(+Measured_Open_Loop_Step_Response_Segments, +X_Pred,
+%!         +Duration, +Model_Pred, +Gene_Values:dict, -Fitness) is det.
+%
+%  Evaluate the fitness of a set gene values. The higher the fitness the
+%  better.
+%
+%  @arg Gene_Values list of gene(Gene_ID, Value)
+%  @arg Duration the number of seconds of Measured_Open_Loop_Step_Response_RB that we are attempting to model
 
-transfer_function(X_Pred, Duration, Time_Step, B0, B1, B2, A0, A1, A2, Y_Points) :-
-   findall(p(T, X), gen_x(X_Pred, Duration, Time_Step, T, X), X_Points),
-   sodt(X_Points, B0, B1, B2, A0, A1, A2, Y_Points).
+:- det(fitness/6).
+
+fitness(Measured_OLSR_Segments, X_Pred, Duration, Model_Pred, Gene_Values, Fitness) :-
+   catch(fitness_1(Measured_OLSR_Segments, X_Pred, Duration, Model_Pred, Gene_Values, Fitness),
+         evaluation_error,
+         _,
+         Fitness = 0).
+
+
+%! fitness_1(+Measured_Open_Loop_Step_Response_Segments, +X_Pred,
+%!           +Duration, +Model_Pred, +Gene_Values:dict,
+%!           -Fitness) is det.
+
+fitness_1(Measured_OLSR_Segments, X_Pred, Duration, Model_Pred, Gene_Values, Fitness) :-
+   transfer_function(X_Pred, Duration, Model_Pred, Gene_Values, Modelled_OLSR),
+   model_error(Modelled_OLSR, Measured_OLSR_Segments, 0, Model_Error),
+   Fitness is 1 / Model_Error.
+
+
+%! transfer_function(+X_Pred, +Duration, +Model_Pred,
+%!                   +Gene_Values:dict, -Points) is det.
+
+transfer_function(X_Pred, Duration, Model_Pred, GV, Y_Points) :-
+   findall(p(T, X), gen_x(X_Pred, Duration, GV.time_step, T, X), X_Points),
+   transfer_function_1(X_Points, Model_Pred, GV, Y_Points).
 
 
 %! gen_x(+X_Pred, +Duration, +Time_Step, -T, -X) is nondet.
@@ -299,82 +373,17 @@ gen_x(X_Pred, Duration, Time_Step, T, X) :-
     call(X_Pred, T, X).
 
 
-%! sodt(+X_Points, +B0, +B1, +B2, +A0, +A1, +A2, -Y_Points) is det.
-%
-%  Second-order linear discrete transfer functionfilter (direct form II
-%  transposed).
-%
-%  The general difference equation for a second-order filter is:
-%
-%  a0.y[n]=b0.x[n]+b1.x[n-1]+b2.x[n-2]-a1.y[n-1]-a2.y[n-2]
-%
-%  Rewriting the Python difference equations below gives:
-%
-%  y[n] = b0*x[n] + b1*x[n-1] - a1*y[n-1] + b2*x[n-2] - a2*y[n-2]
-%  i.e. the same as above
-%
-%  Assumes A0 is normalized to 1.
-%
-%  B0, B1, B2 are the numerator coefficients
-%  A0, A1, A2 are the denominator coefficients
-%
-%  For reference here is a Python implementation:
-%
-%  Difference equations for Direct Form II Transposed (second order)
-%    y[n] = b0*x[n] + d1[n-1]
-%    d1[n] = b1*x[n] - a1*y[n] + d2[n-1]
-%    d2[n] = b2*x[n] - a2*y[n]
-%
-%    for n in range(len(x)):
-%        y[n] = b[0] * x[n] + d1
-%        d1 = b[1] * x[n] - a[1] * y[n] + d2
-%        d2 = b[2] * x[n] - a[2] * y[n]
-%
-%  Reference
-%  https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter.html
-%
-%  @arg X_Points list of p(T, X)
-%  @arg Y_Points list of p(T, Y)
+%! transfer_function_1(+X_Points, +Model_Pred, +Gene_Values:dict,
+%!                     -Y_Points) is det.
 
-:- det(sodt/8).
-
-sodt(X_Points, B0, B1, B2, A0, A1, A2, Y_Points) :-
-   assertion(A0 == 1),
+transfer_function_1(X_Points, Model_Pred, Gene_Values, Y_Points) :-
    X_Points = [p(_, X2), p(_, X1)|_],
-   sodt_1(X_Points, X2, X1, 0, 0, B0, B1, B2, A0, A1, A2, Y_Points).
+   transfer_function_2(X_Points, X2, X1, 0, 0, Model_Pred, Gene_Values, Y_Points).
 
-sodt_1([], _, _, _, _, _, _, _, _, _, _, []).
-sodt_1([p(T, X)|P1], X2, X1, Y2, Y1, B0, B1, B2, A0, A1, A2, [p(T, Y)|P2]) :-
-   Y is B0 * X + B1 * X1 - A1 * Y1 + B2 * X2 - A2 * Y2,
-   sodt_1(P1, X1, X, Y1, Y, B0, B1, B2, A0, A1, A2, P2).
-
-
-
-%! fitness(+Measured_Open_Loop_Step_Response_Segments, +X_Pred,
-%!         +Duration, +Gene_Values, -Fitness) is det.
-%
-%  Evaluate the fitness of a set gene values. The higher the fitness the
-%  better.
-%
-%  @arg Duration the number of seconds of Measured_Open_Loop_Step_Response_RB that we are attempting to model
-
-:- det(fitness/5).
-
-fitness(Measured_OLSR_Segments, X_Pred, Duration, Gene_Values, Fitness) :-
-   catch(fitness_1(Measured_OLSR_Segments, X_Pred, Duration, Gene_Values, Fitness),
-         evaluation_error,
-         _,
-         Fitness = 0).
-
-
-%! fitness_1(+Measured_Open_Loop_Step_Response_Segments, +X_Pred,
-%!           +Duration, +Gene_Values,
-%!           -Fitness) is det.
-
-fitness_1(Measured_OLSR_Segments, X_Pred, Duration, [Sample_Time, B0, B1, B2, A1, A2], Fitness) :-
-   transfer_function(X_Pred, Duration, Sample_Time, B0, B1, B2, 1, A1, A2, Modelled_OLSR),
-   model_error(Modelled_OLSR, Measured_OLSR_Segments, 0, Model_Error),
-   Fitness is 1 / Model_Error.
+transfer_function_2([], _, _, _, _, _, _, []).
+transfer_function_2([p(T, X)|P1], X2, X1, Y2, Y1, Model_Pred, Gene_Values, [p(T, Y)|P2]) :-
+   call(Model_Pred, Gene_Values, X2, X1, Y2, Y1, X, Y),
+   transfer_function_2(P1, X1, X, Y1, Y, Model_Pred, Gene_Values, P2).
 
 
 %! model_error(+Modelled_Open_Loop_Step_Response,
@@ -489,17 +498,25 @@ update_fitness([individual(_, Chromosome)|P1], Gene_Map, Fitness_Pred, Fitness_P
    update_fitness(P1, Gene_Map, Fitness_Pred, Fitness_Plot, P2).
 
 
-%!  chromosome_gene_values(+Chromosome, +Gene_Map, -Gene_Values) is det.
+%! chromosome_gene_values(+Chromosome, +Gene_Map, -Gene_Values:dict) is det.
 %
-%  @arg Gene_Values list of numeric values (the application parameters)
+%  @arg Gene_Values list of name-value pairs
 
-:- det(chromosome_gene_values/3).
+chromosome_gene_values(Chromosome, Gene_Map, Gene_Values) :-
+   chromosome_gene_values(Chromosome, Gene_Map, gene_values{}, Gene_Values).
 
-chromosome_gene_values([], _, []) :-
+
+%! chromosome_gene_values(+Chromosome, +Gene_Map, +Gene_Values:dict, -Gene_Values:dict) is det.
+%
+%  @arg Gene_Values list of name-value pairs
+
+:- det(chromosome_gene_values/4).
+
+chromosome_gene_values([], _, GV, GV) :-
    !.
-chromosome_gene_values([g(Gene_ID, Gene_Bits)|Genes], [gene(Gene_ID, Lower_Limit, Upper_Limit)|Gene_Map], [Value|Gene_Values]) :-
+chromosome_gene_values([g(Gene_ID, Gene_Bits, Value)|Genes], [gene(Gene_ID, Lower_Limit, Upper_Limit)|Gene_Map], GV0, GV) :-
    gene_bits_to_value(Gene_Bits, Lower_Limit, Upper_Limit, Value),
-   chromosome_gene_values(Genes, Gene_Map, Gene_Values).
+   chromosome_gene_values(Genes, Gene_Map, GV0.put(Gene_ID, Value), GV).
 
 
 %  R E P R O D U C T I O N
