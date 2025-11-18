@@ -1,3 +1,4 @@
+
 /* Part of aircraft_state_estimator
 
 Author:        Mike Elston
@@ -113,6 +114,11 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 sodt(G, X2, X1, Y2, Y1, X, Y) :-
    Y is G.b0 * X + G.b1 * X1 - G.a1 * Y1 + G.b2 * X2 - G.a2 * Y2.
 
+:- det(decay/7).
+
+decay(G, _X2, _X1, _Y2, _Y1, X, Y) :-
+   Y is G.d0 * X.
+
 
 %! galg_config(-Dict) is det.
 
@@ -141,11 +147,10 @@ user:ts :-
    measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(1.0, Fitness_Plot),
    RL = 1.5,
-   Gene_Map = [gene(sodt_time_step, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL)],
-   %               gene(decay_time_step, 1.0, 4.0), gene(d0, 0, 1.0)],
-
-   findall(p(T, X), gen_x(step_input(Step_Size), Duration, 0.1, T, X), In_Points),
-   Models = [model(sodt, sodt_time_step) /*, model(decay, decay_time_step)*/],
+   Gene_Map = [gene(sodt_time_step, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL),
+               gene(decay_time_step, 1.0, 10.0), gene(d0, 0, 0.5)],
+   findall(p(T, X), gen_x(step_input(Step_Size), Duration, 0.2, T, X), In_Points),
+   Models = [model(sodt, sodt_time_step), model(decay, decay_time_step)],
    points_to_segments(Measured_OLSR, Measured_OLSR_Segments),
    gen_alg_optimise(fitness(Measured_OLSR_Segments, In_Points, Models), Gene_Map, Fitness_Plot, Fittest_Individual),
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
