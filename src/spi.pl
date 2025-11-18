@@ -60,21 +60,21 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 :- use_module(library(aggregate), [aggregate_all/3]).
 
 :- meta_predicate
-   fitness(+, 2, +, +, +, -),
-   fitness_1(+, 2, +, +, +, -),
+   fitness(+, +, +, +, -),
+   fitness_1(+, +, +, +, -),
    gen_alg_optimise(2, +, +, -),
    gen_alg_optimise_1(+, +, +, +, +, +, 2, +, +, -, -),
    gen_x(2, +, +, -, -),
-   model(+, +, +, +, +, +, -),
-   transfer_function(2, +, +, +, -),
-   transfer_function_1(+, 6, +, -).
+   sodt(+, +, +, +, +, +, -),
+   transfer_function(:, +, +, -),
+   transfer_function_1(6, +, +, +, -).
 
 
 %:- set_prolog_flag(optimise, true).
 
-%  M O D E L
+%  M O D E L S
 %
-%! model(+Gene_Values:dict, +X2:x[n-2], +X1:x[n-1], +Y2:y[n-2], +Y1:y[n-1], +X, -Y) is det.
+%! sodt(+Gene_Values:dict, +X2:x[n-2], +X1:x[n-1], +Y2:y[n-2], +Y1:y[n-1], +X, -Y) is det.
 %
 %  Second-order linear discrete transfer function filter (direct form II
 %  transposed).
@@ -108,11 +108,10 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 %  Reference
 %  https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter.html
 
-:- det(model/7).
+:- det(sodt/7).
 
-model(G, X2, X1, Y2, Y1, X, Y) :-
+sodt(G, X2, X1, Y2, Y1, X, Y) :-
    Y is G.b0 * X + G.b1 * X1 - G.a1 * Y1 + G.b2 * X2 - G.a2 * Y2.
-
 
 
 %! galg_config(-Dict) is det.
@@ -122,6 +121,15 @@ galg_config(galg_config{num_gene_bits: 16,
                         max_generations: 20,
                         r1: 0.20,              % The fittest individual is this proportion of the next generation
                         mutation_rate: 0.01}).
+
+%! gen_x(+X_Pred, +Duration, +Time_Step, -T, -X) is nondet.
+
+gen_x(X_Pred, Duration, Time_Step, T, X) :-
+    N is integer(Duration/Time_Step),
+    NN is N -1,
+    between(0, NN, I),
+    T is I * Time_Step,
+    call(X_Pred, T, X).
 
 
 %  T E S T
@@ -133,12 +141,16 @@ user:ts :-
    measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(1.0, Fitness_Plot),
    RL = 1.5,
-   Gene_Map = [gene(time_step, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL)],
-   points_to_rb_tree(Measured_OLSR, Measured_OLSR_Segments),
-   gen_alg_optimise(fitness(Measured_OLSR_Segments, step_input(Step_Size), Duration, model), Gene_Map, Fitness_Plot, Fittest_Individual),
+   Gene_Map = [gene(sodt_time_step, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL)],
+   %               gene(decay_time_step, 1.0, 4.0), gene(d0, 0, 1.0)],
+
+   findall(p(T, X), gen_x(step_input(Step_Size), Duration, 0.1, T, X), In_Points),
+   Models = [model(sodt, sodt_time_step) /*, model(decay, decay_time_step)*/],
+   points_to_segments(Measured_OLSR, Measured_OLSR_Segments),
+   gen_alg_optimise(fitness(Measured_OLSR_Segments, In_Points, Models), Gene_Map, Fitness_Plot, Fittest_Individual),
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes),
-   transfer_function(step_input(Step_Size), Duration, model, Fittest_Genes, Modelled_OLSR),
+   transfer_function(Models, Fittest_Genes, In_Points, Modelled_OLSR),
    plot_measured_and_modelled(Gene_Map, Fittest_Genes, Best_Fitness, Duration, Measured_OLSR, Modelled_OLSR).
 
 
@@ -282,62 +294,93 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
    y_values(T1, T2).
 
 
-%! fitness(+Measured_Open_Loop_Step_Response_Segments, +X_Pred,
-%!         +Duration, +Model_Pred, +Gene_Values:dict, -Fitness) is det.
+%! fitness(+Measured_Open_Loop_Step_Response_Segments, +In_Points
+%!         +Models, +Gene_Values, -Fitness) is det.
 %
 %  Evaluate the fitness of a set gene values. The higher the fitness the
 %  better.
 %
-%  @arg Duration the number of seconds of Measured_Open_Loop_Step_Response_RB that we are attempting to model
+%  @arg In_Points list of p(T, V)
+%  @arg Measured_Open_Loop_Step_Response_Segments RB-tree of time ranges and values:
+%    Key = T1-T2
+%    Value = average of the values on point 1 and point 2
+%  @arg Models list of model(Predicate_Name, Time_Step_Gene_ID)
+%  @arg Gene_Values dict
 
-:- det(fitness/6).
+:- det(fitness/5).
 
-fitness(Measured_OLSR_Segments, X_Pred, Duration, Model_Pred, Gene_Values, Fitness) :-
-   catch(fitness_1(Measured_OLSR_Segments, X_Pred, Duration, Model_Pred, Gene_Values, Fitness),
+fitness(Measured_OLSR_Segments, In_Points, Models, Gene_Values, Fitness) :-
+   catch(fitness_1(Models, Measured_OLSR_Segments, In_Points, Gene_Values, Fitness),
          evaluation_error,
          _,
          Fitness = 0).
 
 
-%! fitness_1(+Measured_Open_Loop_Step_Response_Segments, +X_Pred,
-%!           +Duration, +Model_Pred, +Gene_Values:dict,
-%!           -Fitness) is det.
+%! fitness_1(+Models, +Measured_Open_Loop_Step_Response_Segments, +In_Points, +Gene_Values:dict, -Fitness) is det.
+%
+%  Apply all the Models making the output points of each model the
+%  input points of the next model. When all models applied, calculate
+%  the error between the Measured_Open_Loop_Step_Response and the
+%  model-generated points.
 
-fitness_1(Measured_OLSR_Segments, X_Pred, Duration, Model_Pred, Gene_Values, Fitness) :-
-   transfer_function(X_Pred, Duration, Model_Pred, Gene_Values, Modelled_OLSR),
-   model_error(Modelled_OLSR, Measured_OLSR_Segments, 0, Model_Error),
+:- det(fitness_1/5).
+
+fitness_1(Models, Measured_OLSR_Segments, In_Points, Gene_Values, Fitness) :-
+   transfer_function(Models, Gene_Values, In_Points, Out_Points),
+   model_error(Out_Points, Measured_OLSR_Segments, 0, Model_Error),
    Fitness is 1 / Model_Error.
 
 
-%! transfer_function(+X_Pred, +Duration, +Model_Pred,
-%!                   +Gene_Values:dict, -Points) is det.
+%! transfer_function(+Models, +Gene_Values:dict, +In_Points, -Out_Points) is det.
 
-transfer_function(X_Pred, Duration, Model_Pred, GV, Y_Points) :-
-   findall(p(T, X), gen_x(X_Pred, Duration, GV.time_step, T, X), X_Points),
-   transfer_function_1(X_Points, Model_Pred, GV, Y_Points).
+:- det(transfer_function/4).
 
-
-%! gen_x(+X_Pred, +Duration, +Time_Step, -T, -X) is nondet.
-
-gen_x(X_Pred, Duration, Time_Step, T, X) :-
-    N is integer(Duration/Time_Step),
-    NN is N -1,
-    between(0, NN, I),
-    T is I * Time_Step,
-    call(X_Pred, T, X).
+transfer_function(_:[], _, P, P) :-
+   !.
+transfer_function(Module:[model(Model_Pred, Time_Step_Gene_ID)|Models], GV, P0, P2) :-
+   transfer_function_1(Module:Model_Pred, GV.Time_Step_Gene_ID, P0, GV, P1),
+   transfer_function(Models, GV, P1, P2).
 
 
-%! transfer_function_1(+X_Points, +Model_Pred, +Gene_Values:dict,
-%!                     -Y_Points) is det.
+%! transfer_function_1(+Model_Pred, +Time_Step, +In_Points,
+%!                     +Gene_Values, -Out_Points) is det.
 
-transfer_function_1(X_Points, Model_Pred, Gene_Values, Y_Points) :-
-   X_Points = [p(_, X2), p(_, X1)|_],
-   transfer_function_2(X_Points, X2, X1, 0, 0, Model_Pred, Gene_Values, Y_Points).
+:- det(transfer_function_1/5).
+
+transfer_function_1(Model_Pred, Time_Step, P0, Gene_Values, P2) :-
+   resample(P0, Time_Step, 0, P1),
+   P1 = [p(_, X2), p(_, X1)|_],
+   transfer_function_2(P1, X2, X1, 0, 0, Model_Pred, Gene_Values, P2).
+
+
+%! transfer_function_2(+In_Points, +X2, +X1, +Y2, +Y1, +Model_Pred,
+%!                     +Gene_Values, -Out_Points) is det.
+
+:- det(transfer_function_2/8).
 
 transfer_function_2([], _, _, _, _, _, _, []).
 transfer_function_2([p(T, X)|P1], X2, X1, Y2, Y1, Model_Pred, Gene_Values, [p(T, Y)|P2]) :-
    call(Model_Pred, Gene_Values, X2, X1, Y2, Y1, X, Y),
    transfer_function_2(P1, X1, X, Y1, Y, Model_Pred, Gene_Values, P2).
+
+
+%! resample(+In_Points, +Time_Step, +T, -Out_Points) is det
+%
+%  Out_Points is the sequence of points corresponding to Tn_Points but
+%  with the specified Time_Step
+
+resample([], _, _, []).
+resample([_], _, _, []) :-
+   !.
+resample([p(T1, V1), p(T2, V2)|P1], Time_Step, T, [p(T, V)|P2]) :-
+   T1 =< T, T < T2,
+   !,
+   R is (V2-V1) / (T2-T1),
+   V is R * (T-T1) + V1,
+   TT is T + Time_Step,
+   resample([p(T1, V1), p(T2, V2)|P1], Time_Step, TT, P2).
+resample([_|P1], Time_Step, T, P2) :-
+   resample(P1, Time_Step, T, P2).
 
 
 %! model_error(+Modelled_Open_Loop_Step_Response,
@@ -354,7 +397,6 @@ model_error([p(T, V_Modelled)|P], RB, E0, E) :-
    ),
    E1 is E0 + (V_Modelled-V_Measured) ** 2,
    model_error(P, RB, E1, E).
-
 
 
 %!  gen_alg_optimise(+Fitness_Pred, +Gene_Map, +Fitness_Plot, -Fittest_Genes) is
@@ -780,31 +822,31 @@ legend_1([item(Legend_Text, Colour)|T], Plotter, X, Y, Spacing, Width, Total_Wid
    legend_1(T, Plotter, Next_X, Y, Spacing, New_Width, Total_Width).
 
 
-%!  points_to_rb_tree(+Points, -RB_Tree_Out) is det.
+%!  points_to_segments(+Points, -RB_Tree_Out) is det.
 %
 %  Represent list of points as RB-tree of time ranges and values:
 %  Key = T1-T2
 %  Value = average of the values on point 1 and point 2
 
-:- det(points_to_rb_tree/2).
+:- det(points_to_segments/2).
 
-points_to_rb_tree(Points, RB1) :-
+points_to_segments(Points, RB1) :-
    rb_empty(RB0),
-   points_to_rb_tree_1(Points, RB0, RB1).
+   points_to_segments_1(Points, RB0, RB1).
 
 
-%!  points_to_rb_tree_1(+Points, +RB_Tree_In, -RB_Tree_Out) is det.
+%!  points_to_segments_1(+Points, +RB_Tree_In, -RB_Tree_Out) is det.
 
-:- det(points_to_rb_tree_1/3).
+:- det(points_to_segments_1/3).
 
-points_to_rb_tree_1([], RB, RB).
-points_to_rb_tree_1([_], RB, RB) :-
+points_to_segments_1([], RB, RB).
+points_to_segments_1([_], RB, RB) :-
    !.
-points_to_rb_tree_1([p(T1, V1), p(T2, V2)|P], RB0, RB) :-
+points_to_segments_1([p(T1, V1), p(T2, V2)|P], RB0, RB) :-
    !,
    V is (V1 + V2) / 2,
    rb_insert(RB0, (T1-T2), V, RB1),
-   points_to_rb_tree_1([p(T2, V2)|P], RB1, RB).
+   points_to_segments_1([p(T2, V2)|P], RB1, RB).
 
 
 
