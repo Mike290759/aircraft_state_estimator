@@ -117,7 +117,7 @@ sodt(G, X2, X1, Y2, Y1, X, Y) :-
 :- det(decay/7).
 
 decay(G, _X2, _X1, _Y2, _Y1, X, Y) :-
-   Y is G.d0 * X.
+   Y is G.d0 * 10 * X.   % ??? Hardcoded 10
 
 
 %! galg_config(-Dict) is det.
@@ -125,7 +125,7 @@ decay(G, _X2, _X1, _Y2, _Y1, X, Y) :-
 galg_config(galg_config{num_gene_bits: 16,
                         population_size: 500,
                         max_generations: 20,
-                        r1: 0.20,              % The fittest individual is this proportion of the next generation
+                        r1: 0.05,              % The fittest individual is this proportion of the next generation
                         mutation_rate: 0.01}).
 
 %! gen_x(+X_Pred, +Duration, +Time_Step, -T, -X) is nondet.
@@ -148,7 +148,7 @@ user:ts :-
    fitness_progress_graph(1.0, Fitness_Plot),
    RL = 1.5,
    Gene_Map = [gene(sodt_time_step, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL),
-               gene(decay_time_step, 1.0, 10.0), gene(d0, 0, 0.5)],
+               gene(decay_time_step, 1.0, 10.0), gene(d0, 0.4, 0.5)],
    findall(p(T, X), gen_x(step_input(Step_Size), Duration, 0.2, T, X), In_Points),
    Models = [model(sodt, sodt_time_step), model(decay, decay_time_step)],
    points_to_segments(Measured_OLSR, Measured_OLSR_Segments),
@@ -340,12 +340,36 @@ fitness_1(Models, Measured_OLSR_Segments, In_Points, Gene_Values, Fitness) :-
 
 :- det(transfer_function/4).
 
+transfer_function(Module:[model(Pred_1, Time_Step_Gene_ID_1), model(Pred_2, Time_Step_Gene_ID_2)], GV, P0, P3) :-
+   transfer_function_1(Module:Pred_1, GV.Time_Step_Gene_ID_1, P0, GV, P1),
+   transfer_function_1(Module:Pred_2, GV.Time_Step_Gene_ID_2, P0, GV, P2),
+   resample(P1, 1, 0, X1),
+   resample(P2, 1, 0, X2),
+   sum_lists(X1, X2, P3).
+
+:- det(sum_lists/3).
+
+sum_lists([], [], []) :-
+   !.
+sum_lists([], _, []) :-
+   !.
+sum_lists(_, [], []) :-
+   !.
+sum_lists([p(T1, V1)|P1], [p(_, V2)|P2], [p(T1, V)|P3]) :-
+   V is V1 + V2,
+   !,
+   sum_lists(P1, P2, P3).
+
+
+/*
+ *
+ *
 transfer_function(_:[], _, P, P) :-
    !.
 transfer_function(Module:[model(Model_Pred, Time_Step_Gene_ID)|Models], GV, P0, P2) :-
    transfer_function_1(Module:Model_Pred, GV.Time_Step_Gene_ID, P0, GV, P1),
    transfer_function(Models, GV, P1, P2).
-
+*/
 
 %! transfer_function_1(+Model_Pred, +Time_Step, +In_Points,
 %!                     +Gene_Values, -Out_Points) is det.
