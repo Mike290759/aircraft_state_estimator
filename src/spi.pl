@@ -145,7 +145,7 @@ gen_x(X_Pred, Duration, Time_Step, T, X) :-
 user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
-   fitness_progress_graph(1.0, Fitness_Plot),
+   fitness_progress_graph(1.0, Fitness_Window, Fitness_Plot),
    RL = 1.5,
    Gene_Map = [gene(sodt_time_step, 1.0, 4.0), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL),
                gene(decay_time_step, 1.0, 10.0), gene(d0, 0.4, 0.5)],
@@ -156,7 +156,8 @@ user:ts :-
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Genes),
    transfer_function(Models, Fittest_Genes, In_Points, Modelled_OLSR),
-   plot_measured_and_modelled(Gene_Map, Fittest_Genes, Best_Fitness, Duration, Measured_OLSR, Modelled_OLSR).
+   plot_measured_and_modelled(Gene_Map, Fittest_Genes, Best_Fitness, Duration, Measured_OLSR, Modelled_OLSR),
+   in_pce_thread(send(Fitness_Window, free)).
 
 
 %! gene_summary(+Gene_Map, +Gene_Values:dict, -Gene_Summary:string) is
@@ -347,6 +348,7 @@ transfer_function(Module:[model(Pred_1, Time_Step_Gene_ID_1), model(Pred_2, Time
    resample(P2, 1, 0, X2),
    sum_lists(X1, X2, P3).
 
+
 :- det(sum_lists/3).
 
 sum_lists([], [], []) :-
@@ -463,7 +465,7 @@ gen_alg_optimise_1(G, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_
    update_fitness(P2, Gene_Map, Fitness_Pred, Fitness_Plot, P3),
    max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P3),
    % writeln(G-f(Worst_Fitness_Of_Generation, Best_Fitness_Of_Generation)),
-   in_pce_thread(send(Fitness_Plot, append, G, Best_Fitness_Of_Generation)),
+   send(Fitness_Plot, append, G, Best_Fitness_Of_Generation),
    reproduce(P3, P4),
    !,  % Green cut
    GG is G + 1,
@@ -785,10 +787,10 @@ test(4) :-
 :- end_tests(spi).
 
 
-%! fitness_progress_graph(+Y_Scale_Max, -Plot) is det.
+%! fitness_progress_graph(+Y_Scale_Max, -Window, -Plot) is det.
 
-fitness_progress_graph(Y_Scale_Max, Plot) :-
-    new(W, auto_sized_picture('GALG')),
+fitness_progress_graph(Y_Scale_Max, W, Plot) :-
+    new(W, auto_sized_picture('Fitness')),
     send(W, max_size, size(2000, 600)),
     send(W, display, new(Plotter, plotter)),
     galg_config(C),
@@ -823,6 +825,7 @@ plot_measured_and_modelled(Gene_Map, Fittest_Genes, Best_Fitness, Duration, Meas
    forall(member(p(T, V), Modelled_OLSR), send(Blue_Plot, append, T, V)),
    forall(member(p(T, V), Measured_OLSR), send(Black_Plot, append, T, V)),
    fail.
+plot_measured_and_modelled(_, _, _, _, _, _).
 
 
 %! legend(+Items, +Plotter, +Y, +Spacing) is det.
