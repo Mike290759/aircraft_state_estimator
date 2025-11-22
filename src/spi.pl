@@ -302,24 +302,24 @@ modelled_response(In_Points, Models, Gene_Values, Out_Points) :-
 :- det(modelled_response_1/5).
 
 modelled_response_1([], _, _, _, []).
-modelled_response_1([p(T, X)|P1], I, M1, GV, [p(T, Y)|P2]) :-
-    modelled_response_2(M1, I, X, GV, M2, _, Y),
+modelled_response_1([p(T, X1)|P1], I, M1, GV, [p(T, X2)|P2]) :-
+    modelled_response_2(M1, I, X1, GV, M2, X2),
     II is I + 1,
     modelled_response_1(P1, II, M2, GV, P2).
 
-%! modelled_response_2(+Models_In, +I, +X, +Gene_Values, +Models_Out, +Y_So_Far, -Final_Y) is det.
+%! modelled_response_2(+Models_In, +I, +X, +Gene_Values, +Models_Out, -Y) is det.
 
-:- det(modelled_response_2/7).
+:- det(modelled_response_2/6).
 
-modelled_response_2([], _, _, _, [], Y, Y) :-
+modelled_response_2([], _, Y, _, [], Y) :-
     !.
-modelled_response_2([model(Formula, Skip_Interval, Xs, Ys, _)|M1], I, X, GV, [model(Formula, Skip_Interval, New_Xs, New_Ys, _)|M2], _, Final_Y) :-
+modelled_response_2([model(Formula, Skip_Interval, Xs, Ys, _)|M1], I, X1, GV, [model(Formula, Skip_Interval, New_Xs, New_Ys, _)|M2], Y) :-
     I mod Skip_Interval == 0,
     !,
-    apply_formula(Formula, GV, X, Xs, Ys, New_Xs, New_Ys, Y),
-    modelled_response_2(M1, I, X, GV, M2, Y, Final_Y).
-modelled_response_2([_|M1], I, X, GV, M2, Y, Final_Y) :-
-    modelled_response_2(M1, I, X, GV, M2, Y, Final_Y).
+    apply_formula(Formula, GV, X1, Xs, Ys, New_Xs, New_Ys, X2),
+    modelled_response_2(M1, I, X2, GV, M2, Y).
+modelled_response_2([_|M1], I, X, GV, M2, Y) :-
+    modelled_response_2(M1, I, X, GV, M2, Y).
 
 
 %! fitness(+Measured_Open_Loop_Step_Response_Segments, +In_Points, +Models, +Gene_Values, -Fitness) is det.
@@ -343,7 +343,6 @@ fitness(Measured_OLSR_Segments, In_Points, Models, GV, Fitness) :-
          _,
          Fitness = 0).
 
-
 %!  fitness_1(+In_Points, +I, +Models, +Measured_OLSR_Segments, +Gene_Values, -Fitness) is det.
 
 fitness_1([], _, Models, _, _, Error) :-
@@ -358,7 +357,7 @@ fitness_1([p(T, X)|P], I, M1, Measured_OLSR_Segments, GV, Fitness) :-
 
 %! fitness_2(+Models_In, +I, +Time, +X, +Measured_OLSR_Segments, +Gene_Values, -Models_Out) is det.
 %
-%  Apply each model to the point p(Time, X) if the point matches a
+%  Apply each model to the point p(Time, Value) if the point matches a
 %  multiple of the model skip interval
 
 :- det(fitness_2/7).
@@ -373,7 +372,7 @@ fitness_2([model(Formula, Skip_Interval, Xs, Ys, E0)|M1], I, T, X, Measured_OLSR
   ;   throw(no_olsr_segment(T))
   ),
   E1 is E0 + (Y - Y_Measured) ** 2,
-  fitness_2(M1, I, T, X, Measured_OLSR_Segments, GV, M2).
+  fitness_2(M1, I, T, Y, Measured_OLSR_Segments, GV, M2).
 fitness_2([_|M1], I, T, X, Measured_OLSR_Segments, GV, M2) :-
     fitness_2(M1, I, T, X, Measured_OLSR_Segments, GV, M2).
 
