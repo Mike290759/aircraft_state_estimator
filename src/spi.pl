@@ -131,11 +131,11 @@ user:ts :-
    fitness_progress_graph(1.0, Fitness_Window, Fitness_Plot),
    RL = 1.5,
    Sampling_Time_Step = 0.2,
-   Gene_Map = [gene(sodt_skip_interval, 5, 20), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL),
-               gene(decay_skip_interval, 10, 40), gene(d0, 1, 20)],
+   Gene_Map = [gene(sodt_skip_interval, 1, 100), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL),
+               gene(decay_skip_interval, 1, 100), gene(d0, 1, 50)],
    findall(p(T, X), gen_x(step_input(Step_Size), Duration, Sampling_Time_Step, T, X), In_Points),
-   Models = [model(b0 * [x] + b1 * [x-1] - a1 * [y-1] + b2 * [x-2] - a2 * [y-2], sodt_skip_interval, [0, 0], [0, 0], 0),
-             model(d0 * [x], decay_skip_interval, [0, 0], [0, 0]), 0],
+   Models = [model(sodt, b0 * [x] + b1 * [x-1] - a1 * [y-1] + b2 * [x-2] - a2 * [y-2], sodt_skip_interval, [0, 0], [0, 0], 0),
+             model(decay, d0 * [x], decay_skip_interval, [0, 0], [0, 0], 0)],
    points_to_segments(Measured_OLSR, Measured_OLSR_Segments),
    gen_alg_optimise(fitness(Measured_OLSR_Segments, In_Points, Models), Gene_Map, Fitness_Plot, Fittest_Individual),
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
@@ -289,6 +289,8 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
 %!                   is det.
 %
 %  Apply Models to In_Points to give Out_Points
+%
+%  @arg Out_Points list of p(T, V)
 
 :- det(modelled_response/4).
 
@@ -316,7 +318,7 @@ modelled_response_1([p(T, X1)|P1], I, M1, GV) -->
 modelled_response_2([], _, _, _, _, []) -->
     !,
     [].
-modelled_response_2([model(Formula, Skip_Interval, Xs, Ys, _)|M1], I, T, X1, GV, [model(Formula, Skip_Interval, New_Xs, New_Ys, _)|M2]) -->
+modelled_response_2([model(Model_ID, Formula, Skip_Interval, Xs, Ys, _)|M1], I, T, X1, GV, [model(Model_ID, Formula, Skip_Interval, New_Xs, New_Ys, _)|M2]) -->
     { I mod integer(GV.Skip_Interval) =:= 0,
       !,
       apply_formula(Formula, GV, X1, Xs, Ys, New_Xs, New_Ys, X2)
@@ -336,12 +338,15 @@ modelled_response_2([Model|M1], I, T, X, GV, [Model|M2]) -->
 %
 %  @arg In_Points list of p(T, V)
 %  @arg Measured_Open_Loop_Step_Response_Segments RB-tree of time ranges and values: Key = T1-T2 Value = average of the values on point 1 and point 2
-%  @arg Models list of model(Formula, Skip_Interval:integer, X_History:list, Y_History:list, Error:float)
+%  @arg Models list of model(Model_ID, Formula, Skip_Interval_ID:atom,
+%  X_History:list, Y_History:list, Error:float)
+
 %  @arg Gene_Values dict
 
 :- det(fitness/5).
 
 fitness(Measured_OLSR_Segments, In_Points, Models, GV, Fitness) :-
+   must_be(list(compound(model(atom, any, atom, list, list, between(0, inf)))), Models),
    catch(( fitness_1(In_Points, 0, Models, Measured_OLSR_Segments, GV, Error),
            Fitness is 1 / Error),
          evaluation_error,
@@ -352,7 +357,7 @@ fitness(Measured_OLSR_Segments, In_Points, Models, GV, Fitness) :-
 
 fitness_1([], _, Models, _, _, Error) :-
    !,
-   aggregate_all(r(sum(E), count), member(model(_, _, _, _, E), Models), r(Total_Error, N)),
+   aggregate_all(r(sum(E), count), member(model(_, _, _, _, _, E), Models), r(Total_Error, N)),
    Error is Total_Error / N.
 fitness_1([p(T, X)|P], I, M1, Measured_OLSR_Segments, GV, Fitness) :-
    fitness_2(M1, I, T, X, Measured_OLSR_Segments, GV, M2),
@@ -368,7 +373,7 @@ fitness_1([p(T, X)|P], I, M1, Measured_OLSR_Segments, GV, Fitness) :-
 :- det(fitness_2/7).
 
 fitness_2([], _, _, _, _, _, []).
-fitness_2([model(Formula, Skip_Interval, Xs, Ys, E0)|M1], I, T, X, Measured_OLSR_Segments, GV, [model(Formula, Skip_Interval, New_Xs, New_Ys, E1)|M2]) :-
+fitness_2([model(Model_ID, Formula, Skip_Interval, Xs, Ys, E0)|M1], I, T, X, Measured_OLSR_Segments, GV, [model(Model_ID, Formula, Skip_Interval, New_Xs, New_Ys, E1)|M2]) :-
    I mod integer(GV.Skip_Interval) =:= 0,
    !,
    apply_formula(Formula, GV, X, Xs, Ys, New_Xs, New_Ys, Y),
@@ -511,7 +516,6 @@ gen_alg_optimise_1(G, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_
    mutate(P1, Mutation_Rate, P2),
    update_fitness(P2, Gene_Map, Fitness_Pred, Fitness_Plot, P3),
    max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P3),
-   % writeln(G-f(Worst_Fitness_Of_Generation, Best_Fitness_Of_Generation)),
    send(Fitness_Plot, append, G, Best_Fitness_Of_Generation),
    reproduce(P3, P4),
    !,  % Green cut
