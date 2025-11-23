@@ -132,7 +132,7 @@ user:ts :-
    RL = 1.5,
    Sampling_Time_Step = 0.2,
    Gene_Map = [gene(sodt_skip_interval, 5, 20), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL),
-               gene(decay_skip_interval, 10, 40), gene(d0, 4, 5)],
+               gene(decay_skip_interval, 10, 40), gene(d0, 1, 20)],
    findall(p(T, X), gen_x(step_input(Step_Size), Duration, Sampling_Time_Step, T, X), In_Points),
    Models = [model(b0 * [x] + b1 * [x-1] - a1 * [y-1] + b2 * [x-2] - a2 * [y-2], sodt_skip_interval, [0, 0], [0, 0], 0),
              model(d0 * [x], decay_skip_interval, [0, 0], [0, 0]), 0],
@@ -141,7 +141,6 @@ user:ts :-
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Gene_Values),
    modelled_response(In_Points, Models, Fittest_Gene_Values, Modelled_OLSR),
-   writeln(egg),
    plot_measured_and_modelled(Gene_Map, Fittest_Gene_Values, Best_Fitness, Duration, Measured_OLSR, Modelled_OLSR),
    in_pce_thread(send(Fitness_Window, free)).
 
@@ -286,7 +285,7 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
    y_values(T1, T2).
 
 
-%! modelled_response(+In_Points, +I, +Models, +Gene_Values, +Out_Points)
+%! modelled_response(+In_Points, +I, +Models, +Gene_Values, -Out_Points)
 %!                   is det.
 %
 %  Apply Models to In_Points to give Out_Points
@@ -294,32 +293,38 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
 :- det(modelled_response/4).
 
 modelled_response(In_Points, Models, Gene_Values, Out_Points) :-
-    modelled_response_1(In_Points, 0, Models, Gene_Values, Out_Points).
+    phrase(modelled_response_1(In_Points, 0, Models, Gene_Values), Out_Points).
 
 
-%! modelled_response_1(+In_Points, +I, +Models, +Gene_Values, +Out_Points) is det.
+%! modelled_response_1(+In_Points, +I, +Models, +Gene_Values) // is det.
 
-:- det(modelled_response_1/5).
+:- det(modelled_response_1//4).
 
-modelled_response_1([], _, _, _, []).
-modelled_response_1([p(T, X1)|P1], I, M1, GV, [p(T, X2)|P2]) :-
-    modelled_response_2(M1, I, X1, GV, M2, X2),
-    II is I + 1,
-    modelled_response_1(P1, II, M2, GV, P2).
+modelled_response_1([], _, _, _) -->
+    [].
+modelled_response_1([p(T, X1)|P1], I, M1, GV) -->
+    modelled_response_2(M1, I, T, X1, GV, M2),
+    { II is I + 1
+    },
+    modelled_response_1(P1, II, M2, GV).
 
-%! modelled_response_2(+Models_In, +I, +X, +Gene_Values, +Models_Out, -Y) is det.
 
-:- det(modelled_response_2/6).
+%! modelled_response_2(+Models_In, +I, +T, +X, +Gene_Values, +Models_Out) // is det.
 
-modelled_response_2([], _, Y, _, [], Y) :-
-    !.
-modelled_response_2([model(Formula, Skip_Interval, Xs, Ys, _)|M1], I, X1, GV, [model(Formula, Skip_Interval, New_Xs, New_Ys, _)|M2], Y) :-
-    I mod Skip_Interval == 0,
+:- det(modelled_response_2//6).
+
+modelled_response_2([], _, _, _, _, []) -->
     !,
-    apply_formula(Formula, GV, X1, Xs, Ys, New_Xs, New_Ys, X2),
-    modelled_response_2(M1, I, X2, GV, M2, Y).
-modelled_response_2([_|M1], I, X, GV, M2, Y) :-
-    modelled_response_2(M1, I, X, GV, M2, Y).
+    [].
+modelled_response_2([model(Formula, Skip_Interval, Xs, Ys, _)|M1], I, T, X1, GV, [model(Formula, Skip_Interval, New_Xs, New_Ys, _)|M2]) -->
+    { I mod integer(GV.Skip_Interval) =:= 0,
+      !,
+      apply_formula(Formula, GV, X1, Xs, Ys, New_Xs, New_Ys, X2)
+    },
+    [p(T, X2)],
+    modelled_response_2(M1, I, T, X2, GV, M2).
+modelled_response_2([Model|M1], I, T, X, GV, [Model|M2]) -->
+    modelled_response_2(M1, I, T, X, GV, M2).
 
 
 %! fitness(+Measured_Open_Loop_Step_Response_Segments, +In_Points, +Models, +Gene_Values, -Fitness) is det.
@@ -364,16 +369,16 @@ fitness_1([p(T, X)|P], I, M1, Measured_OLSR_Segments, GV, Fitness) :-
 
 fitness_2([], _, _, _, _, _, []).
 fitness_2([model(Formula, Skip_Interval, Xs, Ys, E0)|M1], I, T, X, Measured_OLSR_Segments, GV, [model(Formula, Skip_Interval, New_Xs, New_Ys, E1)|M2]) :-
-  I mod Skip_Interval == 0,
-  !,
-  apply_formula(Formula, GV, X, Xs, Ys, New_Xs, New_Ys, Y),
-  (   rb_lookup_range(T, _, V, Measured_OLSR_Segments)
-  ->  Y_Measured = V
-  ;   throw(no_olsr_segment(T))
-  ),
-  E1 is E0 + (Y - Y_Measured) ** 2,
-  fitness_2(M1, I, T, Y, Measured_OLSR_Segments, GV, M2).
-fitness_2([_|M1], I, T, X, Measured_OLSR_Segments, GV, M2) :-
+   I mod integer(GV.Skip_Interval) =:= 0,
+   !,
+   apply_formula(Formula, GV, X, Xs, Ys, New_Xs, New_Ys, Y),
+   (   rb_lookup_range(T, _, V, Measured_OLSR_Segments)
+   ->  Y_Measured = V
+   ;   throw(no_olsr_segment(T))
+   ),
+   E1 is E0 + (Y - Y_Measured) ** 2,
+   fitness_2(M1, I, T, Y, Measured_OLSR_Segments, GV, M2).
+fitness_2([Model|M1], I, T, X, Measured_OLSR_Segments, GV, [Model|M2]) :-
     fitness_2(M1, I, T, X, Measured_OLSR_Segments, GV, M2).
 
 
@@ -784,7 +789,6 @@ flip_bit(1, 0).
 %  Generate the step input for all time >= T=0
 
 step_input(Step_Size, _, Step_Size).
-
 
 
 %! gene_bits_to_value(+Bits, +Lower_Limit, +Upper_Limit, -Value) is det.
