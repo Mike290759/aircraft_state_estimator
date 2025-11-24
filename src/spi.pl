@@ -134,10 +134,9 @@ user:ts :-
    Gene_Map = [gene(sodt_skip_interval, 1, 100), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL),
                gene(decay_skip_interval, 1, 100), gene(d0, 1, 50)],
    findall(p(T, X), gen_x(step_input(Step_Size), Duration, Sampling_Time_Step, T, X), In_Points),
-   Models = [model(sodt, b0 * [x] + b1 * [x-1] - a1 * [y-1] + b2 * [x-2] - a2 * [y-2], sodt_skip_interval, [0, 0], [0, 0], 0),
-             model(decay, d0 * [x], decay_skip_interval, [0, 0], [0, 0], 0)],
-   points_to_segments(Measured_OLSR, Measured_OLSR_Segments),
-   gen_alg_optimise(fitness(Measured_OLSR_Segments, In_Points, Models), Gene_Map, Fitness_Plot, Fittest_Individual),
+   Models = [model(sodt, b0 * [x] + b1 * [x-1] - a1 * [y-1] + b2 * [x-2] - a2 * [y-2], sodt_skip_interval, [0, 0], [0, 0]),
+             model(decay, d0 * [x], decay_skip_interval, [0, 0], [0, 0])],
+   gen_alg_optimise(fitness(Measured_OLSR, In_Points, Models), Gene_Map, Fitness_Plot, Fittest_Individual),
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Gene_Values),
    modelled_response(In_Points, Models, Fittest_Gene_Values, Modelled_OLSR),
@@ -318,7 +317,7 @@ modelled_response_1([p(T, X1)|P1], I, M1, GV) -->
 modelled_response_2([], _, _, _, _, []) -->
     !,
     [].
-modelled_response_2([model(Model_ID, Formula, Skip_Interval, Xs, Ys, _)|M1], I, T, X1, GV, [model(Model_ID, Formula, Skip_Interval, New_Xs, New_Ys, _)|M2]) -->
+modelled_response_2([model(Model_ID, Formula, Skip_Interval, Xs, Ys)|M1], I, T, X1, GV, [model(Model_ID, Formula, Skip_Interval, New_Xs, New_Ys)|M2]) -->
     { I mod integer(GV.Skip_Interval) =:= 0,
       !,
       apply_formula(Formula, GV, X1, Xs, Ys, New_Xs, New_Ys, X2)
@@ -327,64 +326,6 @@ modelled_response_2([model(Model_ID, Formula, Skip_Interval, Xs, Ys, _)|M1], I, 
     modelled_response_2(M1, I, T, X2, GV, M2).
 modelled_response_2([Model|M1], I, T, X, GV, [Model|M2]) -->
     modelled_response_2(M1, I, T, X, GV, M2).
-
-
-%! fitness(+Measured_Open_Loop_Step_Response_Segments, +In_Points, +Models, +Gene_Values, -Fitness) is det.
-%
-%  Evaluate the fitness of a set of gene values. The higher the fitness
-%  the better.
-%
-%  See apply_formula/8 for details of the model Formula
-%
-%  @arg In_Points list of p(T, V)
-%  @arg Measured_Open_Loop_Step_Response_Segments RB-tree of time ranges and values: Key = T1-T2 Value = average of the values on point 1 and point 2
-%  @arg Models list of model(Model_ID, Formula, Skip_Interval_ID:atom,
-%  X_History:list, Y_History:list, Error:float)
-
-%  @arg Gene_Values dict
-
-:- det(fitness/5).
-
-fitness(Measured_OLSR_Segments, In_Points, Models, GV, Fitness) :-
-   must_be(list(compound(model(atom, any, atom, list, list, between(0, inf)))), Models),
-   catch(( fitness_1(In_Points, 0, Models, Measured_OLSR_Segments, GV, Error),
-           Fitness is 1 / Error),
-         evaluation_error,
-         _,
-         Fitness = 0).
-
-%!  fitness_1(+In_Points, +I, +Models, +Measured_OLSR_Segments, +Gene_Values, -Fitness) is det.
-
-fitness_1([], _, Models, _, _, Error) :-
-   !,
-   aggregate_all(r(sum(E), count), member(model(_, _, _, _, _, E), Models), r(Total_Error, N)),
-   Error is Total_Error / N.
-fitness_1([p(T, X)|P], I, M1, Measured_OLSR_Segments, GV, Fitness) :-
-   fitness_2(M1, I, T, X, Measured_OLSR_Segments, GV, M2),
-   II is I + 1,
-   fitness_1(P, II, M2, Measured_OLSR_Segments, GV, Fitness).
-
-
-%! fitness_2(+Models_In, +I, +Time, +X, +Measured_OLSR_Segments, +Gene_Values, -Models_Out) is det.
-%
-%  Apply each model to the point p(Time, Value) if the point matches a
-%  multiple of the model skip interval
-
-:- det(fitness_2/7).
-
-fitness_2([], _, _, _, _, _, []).
-fitness_2([model(Model_ID, Formula, Skip_Interval, Xs, Ys, E0)|M1], I, T, X, Measured_OLSR_Segments, GV, [model(Model_ID, Formula, Skip_Interval, New_Xs, New_Ys, E1)|M2]) :-
-   I mod integer(GV.Skip_Interval) =:= 0,
-   !,
-   apply_formula(Formula, GV, X, Xs, Ys, New_Xs, New_Ys, Y),
-   (   rb_lookup_range(T, _, V, Measured_OLSR_Segments)
-   ->  Y_Measured = V
-   ;   throw(no_olsr_segment(T))
-   ),
-   E1 is E0 + (Y - Y_Measured) ** 2,
-   fitness_2(M1, I, T, Y, Measured_OLSR_Segments, GV, M2).
-fitness_2([Model|M1], I, T, X, Measured_OLSR_Segments, GV, [Model|M2]) :-
-    fitness_2(M1, I, T, X, Measured_OLSR_Segments, GV, M2).
 
 
 %!  apply_formula(+Formula, +Gene_Values, +X, +Xs, +Ys, -New_Xs, -New_Ys, -Y) is det.
@@ -479,6 +420,36 @@ test(3) :-
 gv(gene_values{a0:0, a1:1, a2:2, b0:3, b1:4, b2:5}).
 
 :- end_tests(formula).
+
+
+%! fitness(+Measured_Points, +In_Points, +Models, +Gene_Values,
+%!         -Fitness) is det.
+%
+%  Evaluate the fitness of a set of gene values. The higher the fitness
+%  the better.
+%
+%  See apply_formula/8 for details of the model Formula
+%
+%  @arg Measured_Points p(T, V)
+%  @arg In_Points list of p(T, V)
+%  @arg Models list of model(Model_ID, Formula, Skip_Interval_ID:atom, X_History:list, Y_History:list)
+%  @arg Gene_Values dict
+%  @arg Fitness float
+
+:- det(fitness/5).
+
+fitness(Measured_Points, In_Points, Models, GV, Fitness) :-
+   modelled_response(In_Points, Models, GV, Model_Points),
+   points_to_segments(Model_Points, Model_Segments),
+   aggregate_all(sum(Error), point_error(Measured_Points, Model_Segments, Error), Total_Error),
+   Fitness is 1 / Total_Error.
+
+%! point_error(+Measured_Points, +Model_Segments, -Error) is nondet.
+
+point_error(Measured_Points, Model_Segments, Error) :-
+   member(p(T, V_Measured), Measured_Points),
+   rb_lookup_range(T, _, V_Modelled, Model_Segments),
+   Error is (V_Measured - V_Modelled) ** 2.
 
 
 %!  gen_alg_optimise(+Fitness_Pred, +Gene_Map, +Fitness_Plot,
@@ -932,35 +903,52 @@ points_to_segments_1([p(T1, V1), p(T2, V2)|P], RB0, RB) :-
 
 
 
-%! rb_lookup_range(+Key, +Key_Range, -Value, -RB) is semidet.
+%! rb_lookup_range(+Key_Value_In_Range, -Key, -Value, +RB) is
+%!                 semidet.
 %
-%  https://occasionallycogent.com/prolog_interval_tree/index.html
+%  RB is an RB-tree where each Value is associated with a key which
+%  is a range Start..End. If Key_Value_In_Range is:
+%
+%  Start =< Key_Value_In_Range < End.
+%
+%  and the range exists within RB then Value is the associated value.
+%
+%  The =< and < range test ensures that a
+%  sequence of ranges derived from a sequence of points e.g.
+%
+%  1, 3, 7, 11 -> 1-3, 3-7, 7-11
+%
+%  has any value in one range only. In the example, 3 is in the range
+%  3-7 not 1-3.
+%
+%  @arg Key is a term Start_End
 
-rb_lookup_range(Key, Key_Range, Value, t(_, Tree)) =>
-    rb_lookup_range_1(Key, Key_Range, Value, Tree).
+rb_lookup_range(Key_Value_In_Range, Key, Value, t(_, Tree)) =>
+    rb_lookup_range_1(Key_Value_In_Range, Key, Value, Tree).
 
-rb_lookup_range_1(_, _, _Value, black('', _, _, '')) :-
-   !,
-   fail.
-rb_lookup_range_1(Key, Key_Range, Value, Tree) :-
+%!  rb_lookup_range_1(+Key, +Key_Range, -Value, -Tree).
+
+rb_lookup_range_1(_, _, _, black('', _, _, '')) =>
+    fail.
+rb_lookup_range_1(Key, Key_Range, Value, Tree) =>
     arg(2, Tree, Start-End),
-    compare(CmpS, Key, Start),
-    compare(CmpE, Key, End),
-    rb_lookup_range_1(t(CmpS, CmpE), Key, Start-End, Key_Range, Value, Tree).
+    (   Key @< Start
+    ->  CMP = (<)
+    ;   Start @=< Key, Key @< End
+    ->  CMP = (=)
+    ;   CMP = (>)
+    ),
+    rb_lookup_range_1(CMP, Key, Start, End, Key_Range, Value, Tree).
 
-rb_lookup_range_1(t(>, <), _, Start-End, Key_Range, Value, Tree) =>
+%!  rb_lookup_range_1(+CMP, +Key, +Start, +End, -Key_Range, -Value, -Tree).
+
+rb_lookup_range_1(=, _, Start, End, Key_Range, Value, Tree) =>
     arg(3, Tree, Value),
     Key_Range = Start-End.
-rb_lookup_range_1(t(=, _), _, Start-End, Key_Range, Value, Tree) =>
-    arg(3, Tree, Value),
-    Key_Range = Start-End.
-rb_lookup_range_1(t(_, =), _, Start-End, Key_Range, Value, Tree) =>
-    arg(3, Tree, Value),
-    Key_Range = Start-End.
-rb_lookup_range_1(t(<, _), Key, _, Key_Range, Value, Tree) =>
+rb_lookup_range_1(<, Key, _, _, Key_Range, Value, Tree) =>
     arg(1, Tree, NTree),
     rb_lookup_range_1(Key, Key_Range, Value, NTree).
-rb_lookup_range_1(t(_, >), Key, _, Key_Range, Value, Tree) =>
+rb_lookup_range_1(>, Key, _, _, Key_Range, Value, Tree) =>
     arg(4, Tree, NTree),
     rb_lookup_range_1(Key, Key_Range, Value, NTree).
 
@@ -968,13 +956,32 @@ rb_lookup_range_1(t(_, >), Key, _, Key_Range, Value, Tree) =>
 :- begin_tests(rb_lookup_range).
 
 test(1) :-
-   L = [(0-50)-1, (51-100)-2, (101-150)-3],
-   list_to_rbtree(L, RB),
-   rb_lookup_range(67, KR, V, RB),
-   KR == (51-100),
-   V == 2.
+    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
+    rb_lookup_range(0, KR, V, RB),
+    KR == (0-10),
+    V =:= 5.
+
+test(2) :-
+    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
+    rb_lookup_range(6, KR, V, RB),
+    KR == (0-10),
+    V =:= 5.
+
+test(3) :-
+    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
+    rb_lookup_range(10, KR, V, RB),
+    KR == (10-11),
+    V =:= 10.5.
+
+test(4) :-
+    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
+    \+ rb_lookup_range(11, _, _, RB).
 
 :- end_tests(rb_lookup_range).
+
+
+
+
 
 
 

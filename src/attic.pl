@@ -72,3 +72,23 @@ resample([p(T1, V1), p(T2, V2)|P1], Time_Step, T, [p(T, V)|P2]) :-
    resample([p(T1, V1), p(T2, V2)|P1], Time_Step, TT, P2).
 resample([_|P1], Time_Step, T, P2) :-
    resample(P1, Time_Step, T, P2).
+
+
+modelled_response(In_Points, Models, Gene_Values, Out_Points)
+
+
+
+   points_to_segments(Model_Points, Model_Segments),
+   aggregate_all(sum(Error), point_error(Measured_Points, Model_Segments, Error), Total_Error),
+   Fitness is 1 / Total_Error.
+
+%! point_error(+Measured_Points, +Model_Segments, -Error) is nondet.
+
+point_error(Measured_Points, Model_Segments, Error) :-
+   member(p(T, V_Measured), Measured_Points),
+   writeln(t(T)),
+   (   rb_lookup_range(T, _, V, Model_Segments)
+   ->  V_Modelled = V
+   ;   writeln(Measured_Points),
+       throw(no_segment(T))
+   ),
