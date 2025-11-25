@@ -46,16 +46,12 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 */
 
 :- use_module(library(lists),
-              [ member/2,
-                max_member/3,
-                min_member/3
-              ]).
+              [member/2, max_member/3, min_member/3, nth1/3, append/3]).
 :- use_module(library(pce), [new/2, send/2, get/3, in_pce_thread/1]).
 :- use_module(library(debug), [assertion/1]).
 :- use_module(library(clpfd)).
 :- use_module(library(random), [random_between/3, random_select/3, maybe/1]).
-:- use_module(library(exceptions), [catch/4]).
-:- use_module(library(rbtrees), [list_to_rbtree/2, rb_empty/1, rb_insert/4]).
+:- use_module(library(rbtrees), [rb_empty/1, rb_insert/4]).
 :- use_module(library(dcg/basics)).
 :- use_module(src(bisection)).
 :- use_module(library(aggregate), [aggregate_all/3]).
@@ -109,13 +105,13 @@ galg_config(galg_config{num_gene_bits: 16,
                         population_size: 500,
                         max_generations: 20,
                         r1: 0.05,              % The fittest individual is this proportion of the next generation
-                        mutation_rate: 0.01}).
+                        mutation_rate: 0.05}).
 
 %! gen_x(+X_Pred, +Duration, +Time_Step, -T, -X) is nondet.
 
 gen_x(X_Pred, Duration, Time_Step, T, X) :-
     N is integer(Duration/Time_Step),
-    NN is N -1,
+    NN is N-1,
     between(0, NN, I),
     T is I * Time_Step,
     call(X_Pred, T, X).
@@ -129,13 +125,13 @@ user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(1.0, Fitness_Window, Fitness_Plot),
-   RL = 1.5,
-   Sampling_Time_Step = 0.2,
-   Gene_Map = [gene(sodt_skip_interval, 1, 100), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL),
-               gene(decay_skip_interval, 1, 100), gene(d0, 1, 50)],
+   RL = 2.5,
+   Sampling_Time_Step = 1.0,
+   Gene_Map = [gene(sodt_skip_interval, 1, 50), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL) /*,
+               gene(decay_skip_interval, 1, 10), gene(d0, -RL, RL), gene(d1, -RL, RL)*/],
    findall(p(T, X), gen_x(step_input(Step_Size), Duration, Sampling_Time_Step, T, X), In_Points),
-   Models = [model(sodt, b0 * [x] + b1 * [x-1] - a1 * [y-1] + b2 * [x-2] - a2 * [y-2], sodt_skip_interval, [0, 0], [0, 0]),
-             model(decay, d0 * [x], decay_skip_interval, [0, 0], [0, 0])],
+   Models = [model(sodt, b0 * x(n) + b1 * x(n-1) - a1 * y(n-1) + b2 * x(n-2) - a2 * y(n-2), sodt_skip_interval) /*,
+             model(decay, d0 * x(n) + d1 * y(n-1), decay_skip_interval)*/],
    gen_alg_optimise(fitness(Measured_OLSR, In_Points, Models), Gene_Map, Fitness_Plot, Fittest_Individual),
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Gene_Values),
@@ -294,38 +290,39 @@ y_values([p(_, Y)|T1], [Y|T2]) :-
 :- det(modelled_response/4).
 
 modelled_response(In_Points, Models, Gene_Values, Out_Points) :-
-    phrase(modelled_response_1(In_Points, 0, Models, Gene_Values), Out_Points).
+    modelled_response_1(Models, In_Points, Gene_Values, Series),
+    merged_series(In_Points, Series, Out_Points).
 
 
-%! modelled_response_1(+In_Points, +I, +Models, +Gene_Values) // is det.
 
-:- det(modelled_response_1//4).
+%! modelled_response_1(+Models, +In_Points, +Gene_Values, -Series) is det.
+%
+%  @arg Series list of model_points(Points)
 
-modelled_response_1([], _, _, _) -->
+modelled_response_1([], _, _, []).
+modelled_response_1([model(_, Formula, Skip_Interval)|M], In_Points, Gene_Values, [model_segments(Model_Segments)|MP]) :-
+    phrase(modelled_response_2(In_Points, 0, Formula, Skip_Interval, [0, 0], [0, 0], Gene_Values), Out_Points),
+    points_to_segments(Out_Points, Model_Segments),
+    modelled_response_1(M, In_Points, Gene_Values, MP).
+
+
+%! modelled_response_2(+In_Points, +I, +Formula,
+%!                     +Skip_Interval, +Xs, Ys, +Gene_Values) // is det.
+
+:- det(modelled_response_2//7).
+
+modelled_response_2([], _, _, _, _, _, _) -->
     [].
-modelled_response_1([p(T, X1)|P1], I, M1, GV) -->
-    modelled_response_2(M1, I, T, X1, GV, M2),
-    { II is I + 1
-    },
-    modelled_response_1(P1, II, M2, GV).
-
-
-%! modelled_response_2(+Models_In, +I, +T, +X, +Gene_Values, +Models_Out) // is det.
-
-:- det(modelled_response_2//6).
-
-modelled_response_2([], _, _, _, _, []) -->
-    !,
-    [].
-modelled_response_2([model(Model_ID, Formula, Skip_Interval, Xs, Ys)|M1], I, T, X1, GV, [model(Model_ID, Formula, Skip_Interval, New_Xs, New_Ys)|M2]) -->
+modelled_response_2([p(T, X)|P], I, Formula, Skip_Interval, Xs_1, Ys_1, GV) -->
     { I mod integer(GV.Skip_Interval) =:= 0,
       !,
-      apply_formula(Formula, GV, X1, Xs, Ys, New_Xs, New_Ys, X2)
+      apply_formula(Formula, GV, X, Xs_1, Ys_1, Xs_2, Ys_2, Y),
+      II is I + 1
     },
-    [p(T, X2)],
-    modelled_response_2(M1, I, T, X2, GV, M2).
-modelled_response_2([Model|M1], I, T, X, GV, [Model|M2]) -->
-    modelled_response_2(M1, I, T, X, GV, M2).
+    [p(T, Y)],
+    modelled_response_2(P, II, Formula, Skip_Interval, Xs_2, Ys_2, GV).
+modelled_response_2([_|P], I, Formula, Skip_Interval, Xs, Ys, GV) -->
+    modelled_response_2(P, I, Formula, Skip_Interval, Xs, Ys, GV).
 
 
 %!  apply_formula(+Formula, +Gene_Values, +X, +Xs, +Ys, -New_Xs, -New_Ys, -Y) is det.
@@ -333,11 +330,11 @@ modelled_response_2([Model|M1], I, T, X, GV, [Model|M2]) -->
 %  In a model a formula is an expression of +, -, * operators with
 %  operands:
 %    * atom refers to a gene value dict id e.g. a0
-%    * [x] the current X value
-%    * [x-N] a previous X value e.g. [x-1]
-%    * [y-N] a previous Y value e.g. [y-2]
+%    * x(n) the current X value
+%    * x(n-N) a previous X value e.g. x(n-1)
+%    * y(n-N) a previous Y value e.g. y(n-2)
 %
-%  e.g. b0 * [x] + b1 * [x-1] - a1 * [y-1] + b2 * [x-2] - a2 * [y-2]
+%  e.g. b0 * x(n) + b1 * x(n-1) - a1 * y(n-1) + b2 * x(n-2) - a2 * y(n-2)
 %
 %  Xs and Ys are the X and Y value histories. The head of the list is
 %  the most recent previous value. A fixed length FIFO buffer
@@ -369,12 +366,12 @@ apply_formula_1(A, GV, _, _, _, Y) :-
    atom(A),
    !,
    Y = GV.A.
-apply_formula_1([x], _ , _, _, X, X) :-
+apply_formula_1(x(n), _ , _, _, X, X) :-
    !.
-apply_formula_1([x-N], _, Xs, _, _, Xn) :-
+apply_formula_1(x(n-N), _, Xs, _, _, Xn) :-
    !,
    nth1(N, Xs, Xn).
-apply_formula_1([y-N], _, _, Ys, _, Yn) :-
+apply_formula_1(y(n-N), _, _, Ys, _, Yn) :-
    !,
    nth1(N, Ys, Yn).
 
@@ -391,12 +388,30 @@ push(X, In, Out) :-
    Out = [X|Front].
 
 
+%! merged_series(+In_Points, +Series, -Out_Points) is det.
+%
+%   @arg Series list of model_segments(+RB_Tree)
+
+merged_series([], _, []).
+merged_series([p(T, _)|P1], Model_Segments, [p(T, V)|P2]) :-
+    aggregate_all(sum(Model_Value), model_value(T, Model_Segments, Model_Value), V),
+    merged_series(P1, Model_Segments, P2).
+
+
+%!  model_value(+T, +Model_Segments, -Model_Value) is nondet.
+
+model_value(T, Model_Segments, Model_Value) :-
+    member(model_segments(Segments), Model_Segments),
+    rb_lookup_range(T, _, Model_Value, Segments).
+
+
+
 :- begin_tests(formula).
 
 test(1) :-
    X = 4,
    gv(GV),
-   apply_formula(b0 * [x] + b1 * [x-1] - a1 * [y-1] + b2 * [x-2] - a2 * [y-2],GV, X,[0,0],[0,0], Xs, Ys, Y),
+   apply_formula(b0 * x(n) + b1 * x(n-1) - a1 * y(n-1) + b2 * x(n-2) - a2 * y(n-2), GV, X,[0,0],[0,0], Xs, Ys, Y),
    Y == 12,
    Xs == [4, 0],
    Ys == [12, 0].
@@ -404,7 +419,7 @@ test(1) :-
 test(2) :-
    X = 5,
    gv(GV),
-   apply_formula(b0 * [x] + b1 * [x-1] - a1 * [y-1] + b2 * [x-2] - a2 * [y-2],GV, X,[4,0],[12,0], Xs, Ys, Y),
+   apply_formula(b0 * x(n) + b1 * x(n-1) - a1 * y(n-1) + b2 * x(n-2) - a2 * y(n-2), GV, X,[4,0],[12,0], Xs, Ys, Y),
    Y == 19,
    Xs == [5, 4],
    Ys == [19, 12].
@@ -412,7 +427,7 @@ test(2) :-
 test(3) :-
    X = 7,
    gv(GV),
-   apply_formula(b0 * [x] + b1 * [x-1] - a1 * [y-1] + b2 * [x-2] - a2 * [y-2],GV, X,[5,4],[19,12], Xs, Ys, Y),
+   apply_formula(b0 * x(n) + b1 * x(n-1) - a1 * y(n-1) + b2 * x(n-2) - a2 * y(n-2), GV, X,[5,4],[19,12], Xs, Ys, Y),
    Y == 18,
    Xs == [7, 5],
    Ys == [18, 19].
@@ -441,8 +456,11 @@ gv(gene_values{a0:0, a1:1, a2:2, b0:3, b1:4, b2:5}).
 fitness(Measured_Points, In_Points, Models, GV, Fitness) :-
    modelled_response(In_Points, Models, GV, Model_Points),
    points_to_segments(Model_Points, Model_Segments),
-   aggregate_all(sum(Error), point_error(Measured_Points, Model_Segments, Error), Total_Error),
-   Fitness is 1 / Total_Error.
+   catch((aggregate_all(sum(Error), point_error(Measured_Points, Model_Segments, Error), Total_Error),
+          Fitness is 1 / Total_Error),
+         evaluation_error,
+         _,
+         Fitness = 0).
 
 %! point_error(+Measured_Points, +Model_Segments, -Error) is nondet.
 
