@@ -92,3 +92,126 @@ point_error(Measured_Points, Model_Segments, Error) :-
    ;   writeln(Measured_Points),
        throw(no_segment(T))
    ),
+
+
+%!  points_to_segments(+Points, -RB_Tree_Out) is det.
+%
+%  Represent list of points as RB-tree of time ranges and values:
+%  Key = T1-T2
+%  Value = average of the values on point 1 and point 2
+
+:- det(points_to_segments/2).
+
+points_to_segments(Points, RB1) :-
+   rb_empty(RB0),
+   points_to_segments_1(Points, RB0, RB1).
+
+
+%!  points_to_segments_1(+Points, +RB_Tree_In, -RB_Tree_Out) is det.
+
+:- det(points_to_segments_1/3).
+
+points_to_segments_1([], RB, RB).
+points_to_segments_1([_], RB, RB) :-
+   !.
+points_to_segments_1([p(T1, V1), p(T2, V2)|P], RB0, RB) :-
+   !,
+   V is (V1 + V2) / 2,
+   rb_insert(RB0, (T1-T2), V, RB1),
+   points_to_segments_1([p(T2, V2)|P], RB1, RB).
+
+
+
+%! rb_lookup_range(+Key_Value_In_Range, -Key, -Value, +RB) is
+%!                 semidet.
+%
+%  RB is an RB-tree where each Value is associated with a key which
+%  is a range Start..End. If Key_Value_In_Range is:
+%
+%  Start =< Key_Value_In_Range < End.
+%
+%  and the range exists within RB then Value is the associated value.
+%
+%  The =< and < range test ensures that a
+%  sequence of ranges derived from a sequence of points e.g.
+%
+%  1, 3, 7, 11 -> 1-3, 3-7, 7-11
+%
+%  has any value in one range only. In the example, 3 is in the range
+%  3-7 not 1-3.
+%
+%  @arg Key is a term Start_End
+
+rb_lookup_range(Key_Value_In_Range, Key, Value, t(_, Tree)) =>
+    rb_lookup_range_1(Key_Value_In_Range, Key, Value, Tree).
+
+%!  rb_lookup_range_1(+Key, +Key_Range, -Value, -Tree).
+
+rb_lookup_range_1(_, _, _, black('', _, _, '')) =>
+    fail.
+rb_lookup_range_1(Key, Key_Range, Value, Tree) =>
+    arg(2, Tree, Start-End),
+    (   Key @< Start
+    ->  CMP = (<)
+    ;   Start @=< Key, Key @< End
+    ->  CMP = (=)
+    ;   CMP = (>)
+    ),
+    rb_lookup_range_1(CMP, Key, Start, End, Key_Range, Value, Tree).
+
+%!  rb_lookup_range_1(+CMP, +Key, +Start, +End, -Key_Range, -Value, -Tree).
+
+rb_lookup_range_1(=, _, Start, End, Key_Range, Value, Tree) =>
+    arg(3, Tree, Value),
+    Key_Range = Start-End.
+rb_lookup_range_1(<, Key, _, _, Key_Range, Value, Tree) =>
+    arg(1, Tree, NTree),
+    rb_lookup_range_1(Key, Key_Range, Value, NTree).
+rb_lookup_range_1(>, Key, _, _, Key_Range, Value, Tree) =>
+    arg(4, Tree, NTree),
+    rb_lookup_range_1(Key, Key_Range, Value, NTree).
+
+
+:- begin_tests(rb_lookup_range).
+
+test(1) :-
+    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
+    rb_lookup_range(0, KR, V, RB),
+    KR == (0-10),
+    V =:= 5.
+
+test(2) :-
+    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
+    rb_lookup_range(6, KR, V, RB),
+    KR == (0-10),
+    V =:= 5.
+
+test(3) :-
+    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
+    rb_lookup_range(10, KR, V, RB),
+    KR == (10-11),
+    V =:= 10.5.
+
+test(4) :-
+    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
+    \+ rb_lookup_range(11, _, _, RB).
+
+:- end_tests(rb_lookup_range).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

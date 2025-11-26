@@ -46,20 +46,27 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 */
 
 :- use_module(library(lists),
-              [member/2, max_member/3, min_member/3, nth1/3, append/3]).
+              [ max_member/3,
+                nth1/3,
+                append/3,
+                sum_list/2,
+                nth0/3,
+                min_list/2,
+                max_list/2
+              ]).
 :- use_module(library(pce), [new/2, send/2, get/3, in_pce_thread/1]).
 :- use_module(library(debug), [assertion/1]).
 :- use_module(library(clpfd)).
 :- use_module(library(random), [random_between/3, random_select/3, maybe/1]).
-:- use_module(library(rbtrees), [rb_empty/1, rb_insert/4]).
 :- use_module(library(dcg/basics)).
 :- use_module(src(bisection)).
 :- use_module(library(aggregate), [aggregate_all/3]).
+:- use_module(library(exceptions), [catch/4]).
+:- use_module(library(pairs), [group_pairs_by_key/2]).
 
 :- meta_predicate
    gen_alg_optimise(2, +, +, -),
-   gen_alg_optimise_1(+, +, +, +, +, +, 2, +, +, -, -),
-   gen_x(2, +, +, -, -).
+   gen_alg_optimise_1(+, +, +, +, +, +, 2, +, +, -, -).
 
 
 %:- set_prolog_flag(optimise, true).
@@ -107,14 +114,12 @@ galg_config(galg_config{num_gene_bits: 16,
                         r1: 0.05,              % The fittest individual is this proportion of the next generation
                         mutation_rate: 0.05}).
 
-%! gen_x(+X_Pred, +Duration, +Time_Step, -T, -X) is nondet.
+%! gen_x(+Step_Size, +N, -X) is nondet.
 
-gen_x(X_Pred, Duration, Time_Step, T, X) :-
-    N is integer(Duration/Time_Step),
+gen_x(_, _, 0).
+gen_x(Step_Size, N, Step_Size) :-
     NN is N-1,
-    between(0, NN, I),
-    T is I * Time_Step,
-    call(X_Pred, T, X).
+    between(1, NN, _).
 
 
 %  T E S T
@@ -123,20 +128,20 @@ gen_x(X_Pred, Duration, Time_Step, T, X) :-
 
 user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
-   measured_open_loop_step_response(dat('step_response.dat'), Duration, _, Step_Size, _, Measured_OLSR),
+   measured_open_loop_step_response(dat('step_response.dat'), Duration, Sampling_Time_Step, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(1.0, Fitness_Window, Fitness_Plot),
-   RL = 2.5,
-   Sampling_Time_Step = 1.0,
-   Gene_Map = [gene(sodt_skip_interval, 1, 50), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL) /*,
+   RL = 1.5,
+   Gene_Map = [gene(sodt_skip_interval, 1, 20), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL) /*,
                gene(decay_skip_interval, 1, 10), gene(d0, -RL, RL), gene(d1, -RL, RL)*/],
-   findall(p(T, X), gen_x(step_input(Step_Size), Duration, Sampling_Time_Step, T, X), In_Points),
+   length(Measured_OLSR, N),
+   findall(X, gen_x(Step_Size, N, X), Step_Input_Values),
    Models = [model(sodt, b0 * x(n) + b1 * x(n-1) - a1 * y(n-1) + b2 * x(n-2) - a2 * y(n-2), sodt_skip_interval) /*,
              model(decay, d0 * x(n) + d1 * y(n-1), decay_skip_interval)*/],
-   gen_alg_optimise(fitness(Measured_OLSR, In_Points, Models), Gene_Map, Fitness_Plot, Fittest_Individual),
+   gen_alg_optimise(fitness(Measured_OLSR, Step_Input_Values, Models), Gene_Map, Fitness_Plot, Fittest_Individual),
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Gene_Values),
-   modelled_response(In_Points, Models, Fittest_Gene_Values, Modelled_OLSR),
-   plot_measured_and_modelled(Gene_Map, Fittest_Gene_Values, Best_Fitness, Duration, Measured_OLSR, Modelled_OLSR),
+   modelled_response(Step_Input_Values, Models, Fittest_Gene_Values, Modelled_OLSR),
+   plot_measured_and_modelled(Gene_Map, Fittest_Gene_Values, Best_Fitness, Duration, Sampling_Time_Step, Measured_OLSR, Modelled_OLSR),
    in_pce_thread(send(Fitness_Window, free)).
 
 
@@ -169,10 +174,9 @@ gene_summary_2(Gene_ID, GV) -->
    Codes.
 
 
-%! measured_open_loop_step_response(+File_Name, +Duration, -Sample_Time,
-%!                                  -Step_Size,
-%!                                  -Normalised_Step_Response) is
-%!                                  det.
+%! measured_open_loop_step_response(+File_Name, +Duration,
+%!                                  -Sampling_Time_Step, -Step_Size,
+%!                                  -Normalised_Step_Response) is det.
 %
 %  Supply the data captured in the PID loop - see capture_open_loop_step_response/3
 %
@@ -183,20 +187,19 @@ gene_summary_2(Gene_ID, GV) -->
 %  and the normalisation factor is returned.
 %
 %  @arg Duration cutoff time for the number of data points to be returned
-%  @arg Sample_Time the length of time between measurements
+%  @arg Sampling_Time_Step the length of time between measurements
 %  @arg Step_Size the size of input step
 %  @arg N the number of data points in the step response series
 %  @arg Normalisation_Factor multiply by this to convert the normalised values back to the original values
-%  @arg Normalised_Step_Response list of p(T, V)
+%  @arg Normalised_Step_Response list of V
 
-measured_open_loop_step_response(File_Name, Duration, Sample_Time, Step_Size, Normalisation_Factor, Normalised_Step_Response) :-
+measured_open_loop_step_response(File_Name, Duration, Sampling_Time_Step, Step_Size, Normalisation_Factor, Normalised_Step_Response) :-
    absolute_file_name(File_Name, Absolute_File_Name),   % Allow for path aliases
    setup_call_cleanup(open(Absolute_File_Name, read, In),
-                      read_step_response(In, Sample_Time, Step_Size, L),
+                      read_step_response(In, Sampling_Time_Step, Step_Size, L),
                       close(In)),
    rebase_time_and_trim(L, Duration, Step_Response),
-   y_values(Step_Response, Y_Values),
-   max_member(abs_max_order, Normalisation_Factor, Y_Values),
+   max_member(abs_max_order, Normalisation_Factor, Step_Response),
    normalised(Step_Response, Normalisation_Factor, Normalised_Step_Response).
 
 
@@ -209,7 +212,7 @@ abs_max_order(A, B) :-
 %! normalised(+P, +Normalisation_Factor, -P_Normalised) is det.
 
 normalised([], _, []).
-normalised([p(T, V1)|P1], Normalisation_Factor, [p(T, V2)|P2]) :-
+normalised([V1|P1], Normalisation_Factor, [V2|P2]) :-
    V2 is V1 / Normalisation_Factor,
    normalised(P1, Normalisation_Factor, P2).
 
@@ -255,6 +258,9 @@ point(In, T, V) :-
 %  accordingly.
 %
 %  Drop points more than Duration after the first point
+%
+%  @arg L1 list op p(T, V)
+%  @arg L2 list of values
 
 rebase_time_and_trim(L1, Duration, L2) :-
    L1 = [p(T0, _)|_],
@@ -262,67 +268,61 @@ rebase_time_and_trim(L1, Duration, L2) :-
    rebase_time_and_trim_1(L1, T0, T_Cutoff, L2).
 
 
-%!  rebase_time_and_trim(+L1, +T0, +T_Cutoff, -L2) is det.
+%!  rebase_time_and_trim(+L1, +T0, +T_Cutoff, +I, -L2) is det.
 
 rebase_time_and_trim_1([], _, _, []).
 rebase_time_and_trim_1([p(T, _)|_], _, T_Cutoff, []) :-
    T > T_Cutoff,
    !.
-rebase_time_and_trim_1([p(T, V)|L1], T0, T_Cutoff, [p(T1, V)|L2]) :-
-    T1 is T-T0,
+rebase_time_and_trim_1([p(_, V)|L1], T0, T_Cutoff, [V|L2]) :-
     rebase_time_and_trim_1(L1, T0, T_Cutoff, L2).
 
 
-%! y_values(+Points, -Y_Values) is det.
-
-y_values([], []).
-y_values([p(_, Y)|T1], [Y|T2]) :-
-   y_values(T1, T2).
-
-
-%! modelled_response(+In_Points, +I, +Models, +Gene_Values, -Out_Points)
-%!                   is det.
+%! modelled_response(+Step_Input_Values, +I, +Models, +Gene_Values, -Model_Output_Values) is det.
 %
-%  Apply Models to In_Points to give Out_Points
+%  Apply Models to In_Values to give Out_Values
 %
-%  @arg Out_Points list of p(T, V)
+%  @arg Step_Input_Values list of V
+%  @arg Model_Output_Values list of V
 
 :- det(modelled_response/4).
 
-modelled_response(In_Points, Models, Gene_Values, Out_Points) :-
-    modelled_response_1(Models, In_Points, Gene_Values, Series),
-    merged_series(In_Points, Series, Out_Points).
+modelled_response(Step_Input_Values, Models, Gene_Values, Model_Output_Values) :-
+    modelled_response_1(Models, Step_Input_Values, Gene_Values, Series),
+    merged_series(Series, Step_Input_Values, Model_Output_Values).
 
 
-
-%! modelled_response_1(+Models, +In_Points, +Gene_Values, -Series) is det.
+%! modelled_response_1(+Models, +Step_Input_Values, +Gene_Values, -Series) is
+%!                     det.
 %
-%  @arg Series list of model_points(Points)
+%  @arg Series list of model_values(Model_ID, Skip_Interval, Values)
 
 modelled_response_1([], _, _, []).
-modelled_response_1([model(_, Formula, Skip_Interval)|M], In_Points, Gene_Values, [model_segments(Model_Segments)|MP]) :-
-    phrase(modelled_response_2(In_Points, 0, Formula, Skip_Interval, [0, 0], [0, 0], Gene_Values), Out_Points),
-    points_to_segments(Out_Points, Model_Segments),
-    modelled_response_1(M, In_Points, Gene_Values, MP).
+modelled_response_1([model(Model_ID, Formula, Skip_Interval_Key)|M], Step_Input_Values, GV, [model_values(Model_ID, Skip_Interval, Values)|S]) :-
+    Skip_Interval is integer(GV.Skip_Interval_Key),
+    phrase(modelled_response_2(Step_Input_Values, 0, Formula, Skip_Interval, [0, 0], [0, 0], GV), Values),
+    modelled_response_1(M, Step_Input_Values, GV, S).
 
 
-%! modelled_response_2(+In_Points, +I, +Formula,
+%! modelled_response_2(+In_Values, +I, +Formula,
 %!                     +Skip_Interval, +Xs, Ys, +Gene_Values) // is det.
 
 :- det(modelled_response_2//7).
 
 modelled_response_2([], _, _, _, _, _, _) -->
     [].
-modelled_response_2([p(T, X)|P], I, Formula, Skip_Interval, Xs_1, Ys_1, GV) -->
-    { I mod integer(GV.Skip_Interval) =:= 0,
+modelled_response_2([X|P], I, Formula, Skip_Interval, Xs_1, Ys_1, GV) -->
+    { I mod Skip_Interval =:= 0,
       !,
       apply_formula(Formula, GV, X, Xs_1, Ys_1, Xs_2, Ys_2, Y),
       II is I + 1
     },
-    [p(T, Y)],
+    [Y],
     modelled_response_2(P, II, Formula, Skip_Interval, Xs_2, Ys_2, GV).
 modelled_response_2([_|P], I, Formula, Skip_Interval, Xs, Ys, GV) -->
-    modelled_response_2(P, I, Formula, Skip_Interval, Xs, Ys, GV).
+    { II is I + 1
+    },
+    modelled_response_2(P, II, Formula, Skip_Interval, Xs, Ys, GV).
 
 
 %!  apply_formula(+Formula, +Gene_Values, +X, +Xs, +Ys, -New_Xs, -New_Ys, -Y) is det.
@@ -388,23 +388,67 @@ push(X, In, Out) :-
    Out = [X|Front].
 
 
-%! merged_series(+In_Points, +Series, -Out_Points) is det.
+%! merged_series(+Series, +Step_Input_Values, -Out_Values) is det.
 %
-%   @arg Series list of model_segments(+RB_Tree)
+%  @arg Series list of model_values(Model_ID, Skip_Interval, Values)
 
-merged_series([], _, []).
-merged_series([p(T, _)|P1], Model_Segments, [p(T, V)|P2]) :-
-    aggregate_all(sum(Model_Value), model_value(T, Model_Segments, Model_Value), V),
-    merged_series(P1, Model_Segments, P2).
+:- det(merged_series/3).
+
+merged_series(Series, Step_Input_Values, Out_Values) :-
+    phrase(merged_series_1(Series, Step_Input_Values), Pairs),
+    sort(1, @=<, Pairs, Sorted_Pairs),
+    group_pairs_by_key(Sorted_Pairs, Groups),
+    summed_values(Groups, Out_Values).
+
+%!  merged_series_1(+Series, +Step_Input_Values) // is det.
+
+merged_series_1([], _) -->
+    [].
+merged_series_1([model_values(_, Skip_Interval, Interval_Model_Values)|T], Step_Input_Values) -->
+    gapless_model_values(Step_Input_Values, Skip_Interval, 0, _, Interval_Model_Values),
+    merged_series_1(T, Step_Input_Values).
 
 
-%!  model_value(+T, +Model_Segments, -Model_Value) is nondet.
+%!  gapless_model_values(+Step_Input_Values, +Skip_Interval, +I, +V, +Interval_Model_Values) // is det.
 
-model_value(T, Model_Segments, Model_Value) :-
-    member(model_segments(Segments), Model_Segments),
-    rb_lookup_range(T, _, Model_Value, Segments).
+:- det(gapless_model_values//5).
+
+gapless_model_values([], _, _, _, _) -->
+    [].
+gapless_model_values([_|T1], Skip_Interval, I, _, [V|T2]) -->
+    { I mod Skip_Interval =:= 0,
+      !,
+      II is I + 1
+    },
+    [I-V],
+    gapless_model_values(T1, Skip_Interval, II, V, T2).
+gapless_model_values([_|T1], Skip_Interval, I, V, T2) -->
+    { II is I + 1
+    },
+    [I-V],
+    gapless_model_values(T1, Skip_Interval, II, V, T2).
 
 
+%!  summed_values(+Groups, -Values) is det.
+
+summed_values([], []).
+summed_values([_-VL|T1], [V|T2]) :-
+    sum_list(VL, V),
+    summed_values(T1, T2).
+
+
+:- begin_tests(merged_series).
+
+test(1) :-
+    Series = [model_values(s1, 5, [1, 2, 3, 1, 4]),
+              model_values(s2, 3, [2, 3, 4, 5, 6, 7, 8, 1, 2])],
+    SIV  = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    merged_series(Series, SIV, OV),
+    % S1 = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 1, 1, 1, 1, 1, 4, 4, 4, 4, 4],
+    % S2 = [2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 1, 1, 1, 2, 2, 2],
+    OV ==  [3, 3, 3, 4, 4, 5, 6, 6, 6, 7, 8, 8, 9, 9, 9, 8, 8, 8, 9, 9,12, 5, 5, 5, 6].
+
+:- end_tests(merged_series).
 
 :- begin_tests(formula).
 
@@ -437,37 +481,35 @@ gv(gene_values{a0:0, a1:1, a2:2, b0:3, b1:4, b2:5}).
 :- end_tests(formula).
 
 
-%! fitness(+Measured_Points, +In_Points, +Models, +Gene_Values,
-%!         -Fitness) is det.
+%! fitness(+Measured_Values, +In_Values, +Models, +Gene_Values, -Fitness) is det.
 %
 %  Evaluate the fitness of a set of gene values. The higher the fitness
 %  the better.
 %
 %  See apply_formula/8 for details of the model Formula
 %
-%  @arg Measured_Points p(T, V)
-%  @arg In_Points list of p(T, V)
+%  @arg Measured_Values list of V
+%  @arg In_Values list of V
 %  @arg Models list of model(Model_ID, Formula, Skip_Interval_ID:atom, X_History:list, Y_History:list)
 %  @arg Gene_Values dict
 %  @arg Fitness float
 
 :- det(fitness/5).
 
-fitness(Measured_Points, In_Points, Models, GV, Fitness) :-
-   modelled_response(In_Points, Models, GV, Model_Points),
-   points_to_segments(Model_Points, Model_Segments),
-   catch((aggregate_all(sum(Error), point_error(Measured_Points, Model_Segments, Error), Total_Error),
+fitness(Measured_Values, In_Values, Models, GV, Fitness) :-
+   modelled_response(In_Values, Models, GV, Model_Values),
+   catch((aggregate_all(sum(Error), error(Measured_Values, Model_Values, Error), Total_Error),
           Fitness is 1 / Total_Error),
          evaluation_error,
          _,
          Fitness = 0).
 
-%! point_error(+Measured_Points, +Model_Segments, -Error) is nondet.
+%! error(+Measured_Values, +Model_Values, -Error) is nondet.
 
-point_error(Measured_Points, Model_Segments, Error) :-
-   member(p(T, V_Measured), Measured_Points),
-   rb_lookup_range(T, _, V_Modelled, Model_Segments),
-   Error is (V_Measured - V_Modelled) ** 2.
+error([V1|_], [V2|_], Error) :-
+   Error is (V1 - V2) ** 2.
+error([_|T1], [_|T2], Error) :-
+    error(T1, T2, Error).
 
 
 %!  gen_alg_optimise(+Fitness_Pred, +Gene_Map, +Fitness_Plot,
@@ -501,9 +543,13 @@ gen_alg_optimise_1(Generation, Max_Generations, _, _, _, _, _, _, P0, P1, Fittes
    P1 = P0.
 gen_alg_optimise_1(G, Max_Generations, Mutation_Rate, Population_Size, Num_Gene_Bits, Gene_Map, Fitness_Pred, Fitness_Plot, P0, P5, Fittest_Individual) :-
    assertion((length(P0, N), N == Population_Size)),
+   repeat,
    swap_genes(P0, Num_Gene_Bits, P1),
    mutate(P1, Mutation_Rate, P2),
-   update_fitness(P2, Gene_Map, Fitness_Pred, Fitness_Plot, P3),
+   catch(update_fitness(P2, Gene_Map, Fitness_Pred, Fitness_Plot, P3),
+         evaluation_error,
+         _,
+         fail),
    max_member(fitness_order, individual(Best_Fitness_Of_Generation, _), P3),
    send(Fitness_Plot, append, G, Best_Fitness_Of_Generation),
    reproduce(P3, P4),
@@ -841,13 +887,16 @@ fitness_progress_graph(Y_Scale_Max, W, Plot) :-
 
 
 %! plot_measured_and_modelled(+Gene_Map, + Fittest_Gene_Values,
-%                             +Best_Fitness, +Duration, +Measured_OLSR,
+%                             +Best_Fitness, +Duration,
+%                             +Sampling_Time_Step, +Measured_OLSR,
 %                             +Modelled_OLSR) is det.
+%
+%  @arg Measured_OLSR list of values
+%  @arg Modelled_OLSR list of values
 
-plot_measured_and_modelled(Gene_Map, Fittest_Gene_Values, Best_Fitness, Duration, Measured_OLSR, Modelled_OLSR) :-
-   y_values(Measured_OLSR, Measured_Y_Values),
-   min_member(@=<, Measured_Min, Measured_Y_Values),
-   max_member(@=<, Measured_Max, Measured_Y_Values),
+plot_measured_and_modelled(Gene_Map, Fittest_Gene_Values, Best_Fitness, Duration, Sampling_Time_Step, Measured_OLSR, Modelled_OLSR) :-
+   min_list(Measured_OLSR, Measured_Min),
+   max_list(Measured_OLSR, Measured_Max),
    gene_summary(Gene_Map, Fittest_Gene_Values, Gene_Summary),
    format(string(Title), 'F=~2f, ~w', [Best_Fitness, Gene_Summary]),
    new(W, auto_sized_picture(Title)),
@@ -861,10 +910,10 @@ plot_measured_and_modelled(Gene_Map, Fittest_Gene_Values, Best_Fitness, Duration
    send(Black_Plot, colour, black),
    legend([item('Measured Open Loop Step Response', black), item('Modelled Open Loop Step Response', blue)], Plotter, 30, 80),
    send(W, open),
-   forall(member(p(T, V), Modelled_OLSR), send(Blue_Plot, append, T, V)),
-   forall(member(p(T, V), Measured_OLSR), send(Black_Plot, append, T, V)),
+   forall(nth0(I, Modelled_OLSR, V), (T is I * Sampling_Time_Step, send(Blue_Plot, append, T, V))),
+   forall(nth0(I, Measured_OLSR, V), (T is I * Sampling_Time_Step, send(Black_Plot, append, T, V))),
    fail.
-plot_measured_and_modelled(_, _, _, _, _, _).
+plot_measured_and_modelled(_, _, _, _, _, _, _).
 
 
 %! legend(+Items, +Plotter, +Y, +Spacing) is det.
@@ -891,116 +940,3 @@ legend_1([item(Legend_Text, Colour)|T], Plotter, X, Y, Spacing, Width, Total_Wid
    Next_X #= X + Text_Width + Spacing,
    New_Width #= Width + Text_Width + Spacing,
    legend_1(T, Plotter, Next_X, Y, Spacing, New_Width, Total_Width).
-
-
-%!  points_to_segments(+Points, -RB_Tree_Out) is det.
-%
-%  Represent list of points as RB-tree of time ranges and values:
-%  Key = T1-T2
-%  Value = average of the values on point 1 and point 2
-
-:- det(points_to_segments/2).
-
-points_to_segments(Points, RB1) :-
-   rb_empty(RB0),
-   points_to_segments_1(Points, RB0, RB1).
-
-
-%!  points_to_segments_1(+Points, +RB_Tree_In, -RB_Tree_Out) is det.
-
-:- det(points_to_segments_1/3).
-
-points_to_segments_1([], RB, RB).
-points_to_segments_1([_], RB, RB) :-
-   !.
-points_to_segments_1([p(T1, V1), p(T2, V2)|P], RB0, RB) :-
-   !,
-   V is (V1 + V2) / 2,
-   rb_insert(RB0, (T1-T2), V, RB1),
-   points_to_segments_1([p(T2, V2)|P], RB1, RB).
-
-
-
-%! rb_lookup_range(+Key_Value_In_Range, -Key, -Value, +RB) is
-%!                 semidet.
-%
-%  RB is an RB-tree where each Value is associated with a key which
-%  is a range Start..End. If Key_Value_In_Range is:
-%
-%  Start =< Key_Value_In_Range < End.
-%
-%  and the range exists within RB then Value is the associated value.
-%
-%  The =< and < range test ensures that a
-%  sequence of ranges derived from a sequence of points e.g.
-%
-%  1, 3, 7, 11 -> 1-3, 3-7, 7-11
-%
-%  has any value in one range only. In the example, 3 is in the range
-%  3-7 not 1-3.
-%
-%  @arg Key is a term Start_End
-
-rb_lookup_range(Key_Value_In_Range, Key, Value, t(_, Tree)) =>
-    rb_lookup_range_1(Key_Value_In_Range, Key, Value, Tree).
-
-%!  rb_lookup_range_1(+Key, +Key_Range, -Value, -Tree).
-
-rb_lookup_range_1(_, _, _, black('', _, _, '')) =>
-    fail.
-rb_lookup_range_1(Key, Key_Range, Value, Tree) =>
-    arg(2, Tree, Start-End),
-    (   Key @< Start
-    ->  CMP = (<)
-    ;   Start @=< Key, Key @< End
-    ->  CMP = (=)
-    ;   CMP = (>)
-    ),
-    rb_lookup_range_1(CMP, Key, Start, End, Key_Range, Value, Tree).
-
-%!  rb_lookup_range_1(+CMP, +Key, +Start, +End, -Key_Range, -Value, -Tree).
-
-rb_lookup_range_1(=, _, Start, End, Key_Range, Value, Tree) =>
-    arg(3, Tree, Value),
-    Key_Range = Start-End.
-rb_lookup_range_1(<, Key, _, _, Key_Range, Value, Tree) =>
-    arg(1, Tree, NTree),
-    rb_lookup_range_1(Key, Key_Range, Value, NTree).
-rb_lookup_range_1(>, Key, _, _, Key_Range, Value, Tree) =>
-    arg(4, Tree, NTree),
-    rb_lookup_range_1(Key, Key_Range, Value, NTree).
-
-
-:- begin_tests(rb_lookup_range).
-
-test(1) :-
-    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
-    rb_lookup_range(0, KR, V, RB),
-    KR == (0-10),
-    V =:= 5.
-
-test(2) :-
-    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
-    rb_lookup_range(6, KR, V, RB),
-    KR == (0-10),
-    V =:= 5.
-
-test(3) :-
-    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
-    rb_lookup_range(10, KR, V, RB),
-    KR == (10-11),
-    V =:= 10.5.
-
-test(4) :-
-    points_to_segments([p(0, 0), p(10, 10), p(11, 11)], RB),
-    \+ rb_lookup_range(11, _, _, RB).
-
-:- end_tests(rb_lookup_range).
-
-
-
-
-
-
-
-
