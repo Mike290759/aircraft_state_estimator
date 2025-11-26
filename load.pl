@@ -2,8 +2,5 @@
 
 :-  emacs,
     edit('README.md'),
-    edit('files.pl'),
-    edit('load.pl'),
-    edit('bisection.pl'),
     edit(src(flightgear)),
     edit(src(spi)).

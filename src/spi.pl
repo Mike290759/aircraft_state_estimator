@@ -1,4 +1,3 @@
-
 /* Part of aircraft_state_estimator
 
 Author:        Mike Elston
@@ -116,8 +115,8 @@ galg_config(galg_config{num_gene_bits: 16,
 
 %! gen_x(+Step_Size, +N, -X) is nondet.
 
-gen_x(_, _, 0).
-gen_x(Step_Size, N, Step_Size) :-
+gen_x(Step_Size, _, Step_Size).
+gen_x(_, N, 0) :-
     NN is N-1,
     between(1, NN, _).
 
@@ -131,13 +130,13 @@ user:ts :-
    measured_open_loop_step_response(dat('step_response.dat'), Duration, Sampling_Time_Step, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(1.0, Fitness_Window, Fitness_Plot),
    RL = 1.5,
-   Gene_Map = [gene(sodt_skip_interval, 1, 20), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL) /*,
-               gene(decay_skip_interval, 1, 10), gene(d0, -RL, RL), gene(d1, -RL, RL)*/],
+   Gene_Map = [/*gene(sodt_skip_interval, 1, 20), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL),*/
+               gene(decay_skip_interval, 1, 50), gene(d0, -20, 20), gene(d1, -2.0, 2.0)],
    length(Measured_OLSR, N),
    findall(X, gen_x(Step_Size, N, X), Step_Input_Values),
-   Models = [model(sodt, b0 * x(n) + b1 * x(n-1) - a1 * y(n-1) + b2 * x(n-2) - a2 * y(n-2), sodt_skip_interval) /*,
-             model(decay, d0 * x(n) + d1 * y(n-1), decay_skip_interval)*/],
-   gen_alg_optimise(fitness(Measured_OLSR, Step_Input_Values, Models), Gene_Map, Fitness_Plot, Fittest_Individual),
+   Models = [/*model(sodt, b0 * x(n) + b1 * x(n-1) - a1 * y(n-1) + b2 * x(n-2) - a2 * y(n-2), sodt_skip_interval),*/
+             model(decay, d0 * x(n) + d1 * y(n-1), decay_skip_interval)],
+   gen_alg_optimise(fitness(Measured_OLSR, Step_Input_Values, Models, [decay_skip_interval]), Gene_Map, Fitness_Plot, Fittest_Individual),
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Gene_Values),
    modelled_response(Step_Input_Values, Models, Fittest_Gene_Values, Modelled_OLSR),
@@ -280,7 +279,10 @@ rebase_time_and_trim_1([p(_, V)|L1], T0, T_Cutoff, [V|L2]) :-
 
 %! modelled_response(+Step_Input_Values, +I, +Models, +Gene_Values, -Model_Output_Values) is det.
 %
-%  Apply Models to In_Values to give Out_Values
+%  Apply Models to In_Values to give Out_Values. Each model is run
+%  independently each generating an output series with the same time
+%  base as Step_Input_Values. The two series are then combined by adding
+%  the value at each time step.
 %
 %  @arg Step_Input_Values list of V
 %  @arg Model_Output_Values list of V
@@ -289,7 +291,7 @@ rebase_time_and_trim_1([p(_, V)|L1], T0, T_Cutoff, [V|L2]) :-
 
 modelled_response(Step_Input_Values, Models, Gene_Values, Model_Output_Values) :-
     modelled_response_1(Models, Step_Input_Values, Gene_Values, Series),
-    merged_series(Series, Step_Input_Values, Model_Output_Values).
+    combined_series(Series, Step_Input_Values, Model_Output_Values).
 
 
 %! modelled_response_1(+Models, +Step_Input_Values, +Gene_Values, -Series) is
@@ -388,25 +390,25 @@ push(X, In, Out) :-
    Out = [X|Front].
 
 
-%! merged_series(+Series, +Step_Input_Values, -Out_Values) is det.
+%! combined_series(+Series, +Step_Input_Values, -Out_Values) is det.
 %
 %  @arg Series list of model_values(Model_ID, Skip_Interval, Values)
 
-:- det(merged_series/3).
+:- det(combined_series/3).
 
-merged_series(Series, Step_Input_Values, Out_Values) :-
-    phrase(merged_series_1(Series, Step_Input_Values), Pairs),
+combined_series(Series, Step_Input_Values, Out_Values) :-
+    phrase(combined_series_1(Series, Step_Input_Values), Pairs),
     sort(1, @=<, Pairs, Sorted_Pairs),
     group_pairs_by_key(Sorted_Pairs, Groups),
     summed_values(Groups, Out_Values).
 
-%!  merged_series_1(+Series, +Step_Input_Values) // is det.
+%!  combined_series_1(+Series, +Step_Input_Values) // is det.
 
-merged_series_1([], _) -->
+combined_series_1([], _) -->
     [].
-merged_series_1([model_values(_, Skip_Interval, Interval_Model_Values)|T], Step_Input_Values) -->
+combined_series_1([model_values(_, Skip_Interval, Interval_Model_Values)|T], Step_Input_Values) -->
     gapless_model_values(Step_Input_Values, Skip_Interval, 0, _, Interval_Model_Values),
-    merged_series_1(T, Step_Input_Values).
+    combined_series_1(T, Step_Input_Values).
 
 
 %!  gapless_model_values(+Step_Input_Values, +Skip_Interval, +I, +V, +Interval_Model_Values) // is det.
@@ -437,18 +439,18 @@ summed_values([_-VL|T1], [V|T2]) :-
     summed_values(T1, T2).
 
 
-:- begin_tests(merged_series).
+:- begin_tests(combined_series).
 
 test(1) :-
     Series = [model_values(s1, 5, [1, 2, 3, 1, 4]),
               model_values(s2, 3, [2, 3, 4, 5, 6, 7, 8, 1, 2])],
     SIV  = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    merged_series(Series, SIV, OV),
+    combined_series(Series, SIV, OV),
     % S1 = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 1, 1, 1, 1, 1, 4, 4, 4, 4, 4],
     % S2 = [2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 1, 1, 1, 2, 2, 2],
     OV ==  [3, 3, 3, 4, 4, 5, 6, 6, 6, 7, 8, 8, 9, 9, 9, 8, 8, 8, 9, 9,12, 5, 5, 5, 6].
 
-:- end_tests(merged_series).
+:- end_tests(combined_series).
 
 :- begin_tests(formula).
 
@@ -481,7 +483,8 @@ gv(gene_values{a0:0, a1:1, a2:2, b0:3, b1:4, b2:5}).
 :- end_tests(formula).
 
 
-%! fitness(+Measured_Values, +In_Values, +Models, +Gene_Values, -Fitness) is det.
+%! fitness(+Measured_Values, +In_Values, +Models,
+%!         +Skip_Interval_IDs, +Gene_Values, -Fitness) is det.
 %
 %  Evaluate the fitness of a set of gene values. The higher the fitness
 %  the better.
@@ -491,25 +494,36 @@ gv(gene_values{a0:0, a1:1, a2:2, b0:3, b1:4, b2:5}).
 %  @arg Measured_Values list of V
 %  @arg In_Values list of V
 %  @arg Models list of model(Model_ID, Formula, Skip_Interval_ID:atom, X_History:list, Y_History:list)
+%  @arg Skip_Interval_IDs
 %  @arg Gene_Values dict
 %  @arg Fitness float
 
-:- det(fitness/5).
+:- det(fitness/6).
 
-fitness(Measured_Values, In_Values, Models, GV, Fitness) :-
+fitness(Measured_Values, In_Values, Models, Skip_Interval_IDs, GV, Fitness) :-
+   total_skip_interval(Skip_Interval_IDs, GV, 0, Total_Skip_Interval),
    modelled_response(In_Values, Models, GV, Model_Values),
-   catch((aggregate_all(sum(Error), error(Measured_Values, Model_Values, Error), Total_Error),
+   catch((aggregate_all(sum(Error), error(Measured_Values, Model_Values, Total_Skip_Interval, Error), Total_Error),
           Fitness is 1 / Total_Error),
          evaluation_error,
          _,
          Fitness = 0).
 
-%! error(+Measured_Values, +Model_Values, -Error) is nondet.
+%! error(+Measured_Values, +Model_Values, +Total_Skip_Interval, -Error)
+%!       is nondet.
 
-error([V1|_], [V2|_], Error) :-
-   Error is (V1 - V2) ** 2.
-error([_|T1], [_|T2], Error) :-
-    error(T1, T2, Error).
+error([V1|_], [V2|_], Total_Skip_Interval, Error) :-
+   Error is Total_Skip_Interval * (V1 - V2) ** 2.
+error([_|T1], [_|T2], Total_Skip_Interval, Error) :-
+    error(T1, T2, Total_Skip_Interval, Error).
+
+
+%! total_skip_interval(+Skip_Interval_IDs, +Gene_Values, +Sub_Total, -Total_Skip_Interval) is det.
+
+total_skip_interval([], _, Total, Total).
+total_skip_interval([Skip_Interval_ID|T], GV, Sub_Total, Total) :-
+    New_Sub_Total is Sub_Total + GV.Skip_Interval_ID,
+    total_skip_interval(T, GV, New_Sub_Total, Total).
 
 
 %!  gen_alg_optimise(+Fitness_Pred, +Gene_Map, +Fitness_Plot,
