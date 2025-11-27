@@ -115,10 +115,11 @@ galg_config(galg_config{num_gene_bits: 16,
 
 %! gen_x(+Step_Size, +N, -X) is nondet.
 
-gen_x(Step_Size, _, Step_Size).
-gen_x(_, N, 0) :-
+gen_x(_, _, 0).
+gen_x(Step_Size, N, V) :-
     NN is N-1,
-    between(1, NN, _).
+    between(1, NN, I),
+    V is Step_Size * (1-(I/NN)).
 
 
 %  T E S T
@@ -129,17 +130,15 @@ user:ts :-
    Duration = 155,  % Duration of the measured response we want to consider
    measured_open_loop_step_response(dat('step_response.dat'), Duration, Sampling_Time_Step, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(1.0, Fitness_Window, Fitness_Plot),
-   RL = 1.5,
-   Gene_Map = [/*gene(sodt_skip_interval, 1, 20), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL),*/
-               gene(decay_skip_interval, 1, 50), gene(d0, -20, 20), gene(d1, -2.0, 2.0)],
+   RL = 0.9,
+   Gene_Map = [gene(sodt_skip_interval, 5, 50), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL), gene(s0, 0, 20)],
    length(Measured_OLSR, N),
    findall(X, gen_x(Step_Size, N, X), Step_Input_Values),
-   Models = [/*model(sodt, b0 * x(n) + b1 * x(n-1) - a1 * y(n-1) + b2 * x(n-2) - a2 * y(n-2), sodt_skip_interval),*/
-             model(decay, d0 * x(n) + d1 * y(n-1), decay_skip_interval)],
-   gen_alg_optimise(fitness(Measured_OLSR, Step_Input_Values, Models, [decay_skip_interval]), Gene_Map, Fitness_Plot, Fittest_Individual),
+   Model = model(sodt, s0 * (b0 * x(n) + b1 * x(n-1) - a1 * y(n-1) + b2 * x(n-2) - a2 * y(n-2)), sodt_skip_interval),
+   gen_alg_optimise(fitness(Measured_OLSR, Step_Input_Values, Model, [sodt_skip_interval]), Gene_Map, Fitness_Plot, Fittest_Individual),
    Fittest_Individual = individual(Best_Fitness, Fittest_Chromosome),
    chromosome_gene_values(Fittest_Chromosome, Gene_Map, Fittest_Gene_Values),
-   modelled_response(Step_Input_Values, Models, Fittest_Gene_Values, Modelled_OLSR),
+   modelled_response(Step_Input_Values, Model, Fittest_Gene_Values, Modelled_OLSR),
    plot_measured_and_modelled(Gene_Map, Fittest_Gene_Values, Best_Fitness, Duration, Sampling_Time_Step, Measured_OLSR, Modelled_OLSR),
    in_pce_thread(send(Fitness_Window, free)).
 
@@ -277,54 +276,39 @@ rebase_time_and_trim_1([p(_, V)|L1], T0, T_Cutoff, [V|L2]) :-
     rebase_time_and_trim_1(L1, T0, T_Cutoff, L2).
 
 
-%! modelled_response(+Step_Input_Values, +I, +Models, +Gene_Values, -Model_Output_Values) is det.
+%! modelled_response(+Step_Input_Values, +I, +Model, +Gene_Values, -Model_Output_Values) is det.
 %
-%  Apply Models to In_Values to give Out_Values. Each model is run
-%  independently each generating an output series with the same time
-%  base as Step_Input_Values. The two series are then combined by adding
-%  the value at each time step.
+%  Apply Model to In_Values to give Out_Values
 %
 %  @arg Step_Input_Values list of V
 %  @arg Model_Output_Values list of V
 
 :- det(modelled_response/4).
 
-modelled_response(Step_Input_Values, Models, Gene_Values, Model_Output_Values) :-
-    modelled_response_1(Models, Step_Input_Values, Gene_Values, Series),
-    combined_series(Series, Step_Input_Values, Model_Output_Values).
-
-
-%! modelled_response_1(+Models, +Step_Input_Values, +Gene_Values, -Series) is
-%!                     det.
-%
-%  @arg Series list of model_values(Model_ID, Skip_Interval, Values)
-
-modelled_response_1([], _, _, []).
-modelled_response_1([model(Model_ID, Formula, Skip_Interval_Key)|M], Step_Input_Values, GV, [model_values(Model_ID, Skip_Interval, Values)|S]) :-
+modelled_response(Step_Input_Values, model(_, Formula, Skip_Interval_Key), GV, Model_Output_Values) :-
     Skip_Interval is integer(GV.Skip_Interval_Key),
-    phrase(modelled_response_2(Step_Input_Values, 0, Formula, Skip_Interval, [0, 0], [0, 0], GV), Values),
-    modelled_response_1(M, Step_Input_Values, GV, S).
+    phrase(modelled_response_1(Step_Input_Values, 0, Formula, Skip_Interval, [0, 0], [0, 0], GV, 0), Model_Output_Values).
 
 
-%! modelled_response_2(+In_Values, +I, +Formula,
-%!                     +Skip_Interval, +Xs, Ys, +Gene_Values) // is det.
+%! modelled_response_1(+In_Values, +I, +Formula, +Skip_Interval, +Xs, +Ys, +Gene_Values, -Y) // is det.
 
-:- det(modelled_response_2//7).
+:- det(modelled_response_1//8).
 
-modelled_response_2([], _, _, _, _, _, _) -->
+modelled_response_1([], _, _, _, _, _, _, _) -->
     [].
-modelled_response_2([X|P], I, Formula, Skip_Interval, Xs_1, Ys_1, GV) -->
+modelled_response_1([X|P], I, Formula, Skip_Interval, Xs_1, Ys_1, GV, _) -->
     { I mod Skip_Interval =:= 0,
       !,
       apply_formula(Formula, GV, X, Xs_1, Ys_1, Xs_2, Ys_2, Y),
       II is I + 1
     },
     [Y],
-    modelled_response_2(P, II, Formula, Skip_Interval, Xs_2, Ys_2, GV).
-modelled_response_2([_|P], I, Formula, Skip_Interval, Xs, Ys, GV) -->
+    modelled_response_1(P, II, Formula, Skip_Interval, Xs_2, Ys_2, GV, Y).
+modelled_response_1([_|P], I, Formula, Skip_Interval, Xs, Ys, GV, Y) -->
     { II is I + 1
     },
-    modelled_response_2(P, II, Formula, Skip_Interval, Xs, Ys, GV).
+    [Y],
+    modelled_response_1(P, II, Formula, Skip_Interval, Xs, Ys, GV, Y).
 
 
 %!  apply_formula(+Formula, +Gene_Values, +X, +Xs, +Ys, -New_Xs, -New_Ys, -Y) is det.
@@ -513,7 +497,7 @@ fitness(Measured_Values, In_Values, Models, Skip_Interval_IDs, GV, Fitness) :-
 %!       is nondet.
 
 error([V1|_], [V2|_], Total_Skip_Interval, Error) :-
-   Error is Total_Skip_Interval * (V1 - V2) ** 2.
+   Error is 0.0 * Total_Skip_Interval + (V1 - V2) ** 2.
 error([_|T1], [_|T2], Total_Skip_Interval, Error) :-
     error(T1, T2, Total_Skip_Interval, Error).
 
