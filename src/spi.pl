@@ -110,8 +110,8 @@ See also https://courses.cs.duke.edu/spring07/cps111/notes/03.pdf
 galg_config(galg_config{num_gene_bits: 16,
                         population_size: 500,
                         max_generations: 20,
-                        r1: 0.05,              % The fittest individual is this proportion of the next generation
-                        mutation_rate: 0.05}).
+                        r1: 0.20,              % The fittest individual is this proportion of the next generation
+                        mutation_rate: 0.01}).
 
 %! gen_x(+Step_Size, +N, -X) is nondet.
 
@@ -131,7 +131,7 @@ user:ts :-
    measured_open_loop_step_response(dat('step_response.dat'), Duration, Sampling_Time_Step, Step_Size, _, Measured_OLSR),
    fitness_progress_graph(1.0, Fitness_Window, Fitness_Plot),
    RL = 0.9,
-   Gene_Map = [gene(sodt_skip_interval, 5, 50), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL), gene(s0, 0, 20)],
+   Gene_Map = [gene(sodt_skip_interval, 20, 50), gene(b0, -RL, RL), gene(b1, -RL, RL), gene(b2, -RL, RL), gene(a1, -RL, RL), gene(a2, -RL, RL), gene(s0, 0, 20)],
    length(Measured_OLSR, N),
    findall(X, gen_x(Step_Size, N, X), Step_Input_Values),
    Model = model(sodt, s0 * (b0 * x(n) + b1 * x(n-1) - a1 * y(n-1) + b2 * x(n-2) - a2 * y(n-2)), sodt_skip_interval),
@@ -497,7 +497,7 @@ fitness(Measured_Values, In_Values, Models, Skip_Interval_IDs, GV, Fitness) :-
 %!       is nondet.
 
 error([V1|_], [V2|_], Total_Skip_Interval, Error) :-
-   Error is 0.0 * Total_Skip_Interval + (V1 - V2) ** 2.
+   Error is 0.001 * Total_Skip_Interval + (V1 - V2) ** 2.
 error([_|T1], [_|T2], Total_Skip_Interval, Error) :-
     error(T1, T2, Total_Skip_Interval, Error).
 
